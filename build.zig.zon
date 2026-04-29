@@ -1,0 +1,16 @@
+.{
+    .name = .haxy,
+    .version = "0.0.0",
+    .dependencies = .{
+        .xit = .{
+            .url = "git+https://github.com/xit-vcs/xit#abb9dd0eb25acfe1138e50a89fddcb8d4584d6e3",
+            .hash = "xit-0.0.0-Ub3nDH5MTwF3pS471llPX_eB8G5KfyXpiNTJdOuW4a1j",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .fingerprint = 0x58fc9b81163a2f71,
+}
