@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const xit = @import("xit");
 const rp = xit.repo;
 const cmd = @import("./command.zig");
+const serve = @import("./serve.zig");
 
 pub const RunOpts = struct {
     out: *std.Io.Writer,
@@ -73,6 +74,14 @@ pub fn run(
         },
         .help => |cmd_kind_maybe| try cmd.printHelp(cmd_kind_maybe, run_opts.out),
         .cli => |cli_cmd| {
+            if (cli_cmd == .serve) {
+                try serve.run(repo_kind, any_repo_opts, io, allocator, cwd_path, .{
+                    .http_listen = cli_cmd.serve.http_listen,
+                    .project_root = cli_cmd.serve.project_root,
+                }, run_opts.err);
+                return;
+            }
+
             // some commands allow the path to be specified. for all others, just use the cwd path.
             const work_path = switch (cli_cmd) {
                 .upload_pack => |upload_pack| try std.fs.path.resolve(allocator, &.{ cwd_path, upload_pack.dir }),
@@ -83,6 +92,7 @@ pub fn run(
                     try xit.net_server_http_backend.sendNotFound(&http_stdout_writer.interface);
                     return;
                 },
+                .serve => unreachable,
             };
             defer allocator.free(work_path);
 
@@ -157,7 +167,7 @@ fn runCommand(
 
             var stdin_buf: [repo_opts.net_buffer_size]u8 = undefined;
             var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buf);
-            try repo.httpBackend(io, allocator, &stdin_reader.interface, &stdout_writer.interface, .{
+            try repo.httpBackend(io, allocator, &stdin_reader.interface, &stdout_writer.interface, .cgi, .{
                 .request_method = request_method,
                 .handler = handler,
                 .suffix = suffix,
@@ -167,5 +177,6 @@ fn runCommand(
                 .protocol_version = xit.net_server_common.detectProtocolVersion(environ_map),
             });
         },
+        .serve => unreachable,
     }
 }

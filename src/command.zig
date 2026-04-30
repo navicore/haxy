@@ -7,6 +7,7 @@ pub const CommandKind = enum {
     upload_pack,
     receive_pack,
     http_backend,
+    serve,
 };
 
 const Help = struct {
@@ -42,6 +43,15 @@ fn commandHelp(command_kind: CommandKind) Help {
             ,
             .example =
             \\haxy http-backend
+            ,
+        },
+        .serve => .{
+            .name = "serve",
+            .descrip =
+            \\a long-running HTTP server forwarding receive-pack and upload-pack.
+            ,
+            .example =
+            \\haxy serve --http-listen 127.0.0.1:8080 --project-root /srv/git
             ,
         },
     };
@@ -103,7 +113,10 @@ pub const CommandArgs = struct {
 
     // flags that can have a value associated with them
     // must be included here
-    const value_flags = std.StaticStringMap(void).initComptime(.{});
+    const value_flags = std.StaticStringMap(void).initComptime(.{
+        .{"--http-listen"},
+        .{"--project-root"},
+    });
 
     pub fn init(allocator: std.mem.Allocator, args: []const []const u8) !CommandArgs {
         const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -203,6 +216,10 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
             options: xit.net_server_receive_pack.Options,
         },
         http_backend,
+        serve: struct {
+            http_listen: []const u8,
+            project_root: []const u8,
+        },
 
         pub fn initMaybe(cmd_args: *CommandArgs) !?Command(repo_kind, hash_kind) {
             const command_kind = cmd_args.command_kind orelse return null;
@@ -234,6 +251,14 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
                     if (cmd_args.positional_args.len != 0) return null;
 
                     return .http_backend;
+                },
+                .serve => {
+                    if (cmd_args.positional_args.len != 0) return null;
+
+                    return .{ .serve = .{
+                        .http_listen = (cmd_args.get("--http-listen") orelse null) orelse "127.0.0.1:8080",
+                        .project_root = (cmd_args.get("--project-root") orelse null) orelse ".",
+                    } };
                 },
             }
         }

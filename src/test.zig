@@ -10,72 +10,78 @@ const net = xit.net;
 test "fetch small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetch(.xit, .xit, .{ .wire = .http }, 3004, io, allocator);
+    try testFetch(.xit, .xit, .{ .wire = .http }, 3004, false, io, allocator);
+    try testFetch(.xit, .xit, .{ .wire = .http }, 3005, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetch(.xit, .xit, .{ .wire = .ssh }, 3006, io, allocator);
+        try testFetch(.xit, .xit, .{ .wire = .ssh }, 3006, false, io, allocator);
     }
 }
 
 test "push small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPush(.xit, .xit, .{ .wire = .http }, 3010, io, allocator);
+    try testPush(.xit, .xit, .{ .wire = .http }, 3010, false, io, allocator);
+    try testPush(.xit, .xit, .{ .wire = .http }, 3011, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPush(.xit, .xit, .{ .wire = .ssh }, 3012, io, allocator);
+        try testPush(.xit, .xit, .{ .wire = .ssh }, 3012, false, io, allocator);
     }
 }
 
 test "clone small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testClone(.xit, .xit, .{ .wire = .http }, 3016, false, io, allocator);
+    try testClone(.xit, .xit, .{ .wire = .http }, 3016, false, false, io, allocator);
+    try testClone(.xit, .xit, .{ .wire = .http }, 3017, false, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testClone(.xit, .xit, .{ .wire = .ssh }, 3018, false, io, allocator);
+        try testClone(.xit, .xit, .{ .wire = .ssh }, 3018, false, false, io, allocator);
     }
 }
 
 test "clone small subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testClone(.git, .xit, .{ .wire = .http }, 3031, true, io, allocator);
+    try testClone(.git, .xit, .{ .wire = .http }, 3031, true, false, io, allocator);
+    try testClone(.git, .xit, .{ .wire = .http }, 3032, true, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testClone(.git, .xit, .{ .wire = .ssh }, 3033, true, io, allocator);
+        try testClone(.git, .xit, .{ .wire = .ssh }, 3033, true, false, io, allocator);
     }
 }
 
 test "fetch large" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetchLarge(.git, .git, .{ .wire = .http }, 3019, false, io, allocator);
+    try testFetchLarge(.git, .git, .{ .wire = .http }, 3019, false, false, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetchLarge(.git, .git, .{ .wire = .ssh }, 3021, false, io, allocator);
+        try testFetchLarge(.git, .git, .{ .wire = .ssh }, 3021, false, false, io, allocator);
     }
 }
 
 test "fetch large subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3022, true, io, allocator);
+    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3022, true, false, io, allocator);
+    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3023, true, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3024, true, io, allocator);
+        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3024, true, false, io, allocator);
     }
 }
 
 test "push large" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPushLarge(.git, .git, .{ .wire = .http }, 3025, false, io, allocator);
+    try testPushLarge(.git, .git, .{ .wire = .http }, 3025, false, false, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPushLarge(.git, .git, .{ .wire = .ssh }, 3027, false, io, allocator);
+        try testPushLarge(.git, .git, .{ .wire = .ssh }, 3027, false, false, io, allocator);
     }
 }
 
 test "git push large subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPushLarge(.git, .xit, .{ .wire = .http }, 3028, true, io, allocator);
+    try testPushLarge(.git, .xit, .{ .wire = .http }, 3028, true, false, io, allocator);
+    try testPushLarge(.git, .xit, .{ .wire = .http }, 3029, true, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3030, true, io, allocator);
+        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3030, true, false, io, allocator);
     }
 }
 
@@ -84,6 +90,7 @@ fn Server(
     comptime transport_def: net.TransportDefinition,
     comptime temp_dir_name: []const u8,
     comptime port: u16,
+    comptime use_serve_command: bool,
 ) type {
     return struct {
         core: Core,
@@ -91,7 +98,11 @@ fn Server(
         const Core = switch (transport_def) {
             .file => void,
             .wire => |wire_kind| switch (wire_kind) {
-                .http => struct {
+                .http => if (use_serve_command) struct {
+                    io: std.Io,
+                    allocator: std.mem.Allocator,
+                    process: ?std.process.Child,
+                } else struct {
                     io: std.Io,
                     allocator: std.mem.Allocator,
                     temp_dir_name: []const u8,
@@ -110,14 +121,27 @@ fn Server(
         fn init(
             io: std.Io,
             allocator: std.mem.Allocator,
-        ) !Server(server_repo_kind, transport_def, temp_dir_name, port) {
+        ) !Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command) {
             switch (transport_def) {
                 .file => return .{ .core = {} },
                 .wire => |wire_kind| switch (wire_kind) {
                     .http => {
+                        if (use_serve_command) {
+                            comptime {
+                                std.debug.assert(server_repo_kind == .xit);
+                            }
+                            return .{
+                                .core = .{
+                                    .io = io,
+                                    .allocator = allocator,
+                                    .process = null,
+                                },
+                            };
+                        }
+
                         const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
                         const net_server = try address.listen(io, .{ .reuse_address = true });
-                        errdefer net_server.deinit();
+                        errdefer net_server.deinit(io);
                         return .{
                             .core = .{
                                 .io = io,
@@ -247,168 +271,185 @@ fn Server(
             }
         }
 
-        fn start(self: *Server(server_repo_kind, transport_def, temp_dir_name, port)) !void {
+        fn start(self: *Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command)) !void {
             switch (transport_def) {
                 .file => {},
                 .wire => |wire_kind| switch (wire_kind) {
                     .http => {
-                        const ServerHandler = struct {
-                            fn run(core: *Core) !void {
-                                var send_buffer = [_]u8{0} ** 1024;
-                                var recv_buffer = [_]u8{0} ** 1024;
+                        if (use_serve_command) {
+                            std.debug.assert(self.core.process == null);
 
-                                accept: while (true) {
-                                    const stream = try core.net_server.accept(core.io);
-                                    defer stream.close(core.io);
+                            const cwd_path = try std.process.currentPathAlloc(self.core.io, self.core.allocator);
+                            defer self.core.allocator.free(cwd_path);
+                            const haxy_path = try std.fs.path.join(self.core.allocator, &.{ cwd_path, "zig-out/bin/haxy" });
+                            defer self.core.allocator.free(haxy_path);
+                            const listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port});
 
-                                    var conn_br = stream.reader(core.io, &recv_buffer);
-                                    var conn_bw = stream.writer(core.io, &send_buffer);
-                                    var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
+                            self.core.process = try std.process.spawn(self.core.io, .{
+                                .argv = &.{ haxy_path, "serve", "--http-listen", listen_arg, "--project-root", temp_dir_name },
+                                .stdin = .ignore,
+                                .stdout = .ignore,
+                                .stderr = .ignore,
+                            });
+                        } else {
+                            const ServerHandler = struct {
+                                fn run(core: *Core) !void {
+                                    var send_buffer = [_]u8{0} ** 1024;
+                                    var recv_buffer = [_]u8{0} ** 1024;
 
-                                    while (http_server.reader.state == .ready) {
-                                        var request = http_server.receiveHead() catch |err| switch (err) {
-                                            error.HttpConnectionClosing => continue :accept,
-                                            else => |e| return e,
-                                        };
-                                        if (std.mem.eql(u8, request.head.target, "/stop-server")) {
-                                            break :accept;
-                                        }
+                                    accept: while (true) {
+                                        const stream = try core.net_server.accept(core.io);
+                                        defer stream.close(core.io);
 
-                                        const uri = try std.Uri.parseAfterScheme("", request.head.target);
-                                        if (uri.path.percent_encoded[0] != '/') return error.PathMustStartWithSlash;
-                                        const path = if (std.mem.indexOfScalar(u8, uri.path.percent_encoded[1..], '/')) |idx|
-                                            uri.path.percent_encoded[idx + 1 ..]
-                                        else
-                                            return error.SlashNotFound;
+                                        var conn_br = stream.reader(core.io, &recv_buffer);
+                                        var conn_bw = stream.writer(core.io, &send_buffer);
+                                        var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
 
-                                        const cwd_path = try std.process.currentPathAlloc(core.io, core.allocator);
-                                        defer core.allocator.free(cwd_path);
-                                        const temp_dir_path = try std.fs.path.join(core.allocator, &.{ cwd_path, core.temp_dir_name });
-                                        defer core.allocator.free(temp_dir_path);
-                                        const path_translated = try std.fmt.allocPrint(core.allocator, "{s}{s}", .{
-                                            temp_dir_path,
-                                            uri.path.percent_encoded,
-                                        });
-                                        defer core.allocator.free(path_translated);
-
-                                        // init env map
-                                        var env_map = std.process.Environ.Map.init(core.allocator);
-                                        defer env_map.deinit();
-                                        try env_map.put("GATEWAY_INTERFACE", "CGI/1.1");
-                                        try env_map.put("REQUEST_METHOD", @tagName(request.head.method));
-                                        try env_map.put("PATH_INFO", path);
-                                        try env_map.put("PATH_TRANSLATED", path_translated);
-                                        if (uri.query) |query| {
-                                            try env_map.put("QUERY_STRING", query.percent_encoded);
-                                        }
-
-                                        var accept: std.ArrayList([]const u8) = .empty;
-                                        defer accept.deinit(core.allocator);
-
-                                        var keep_alive = true; // HTTP 1.1 defaults to keep-alive
-
-                                        // iterate over headers to fill env map
-                                        var req_header_it = request.iterateHeaders();
-                                        while (req_header_it.next()) |header| {
-                                            const header_name = header.name;
-                                            const header_value = header.value;
-
-                                            if (std.ascii.eqlIgnoreCase(header_name, "content-type")) {
-                                                try env_map.put("CONTENT_TYPE", header_value);
-                                            } else if (std.ascii.eqlIgnoreCase(header_name, "content-length")) {
-                                                try env_map.put("CONTENT_LENGTH", header_value);
-                                            } else if (std.ascii.eqlIgnoreCase(header_name, "referer")) {
-                                                try env_map.put("HTTP_REFERER", header_value);
-                                            } else if (std.ascii.eqlIgnoreCase(header_name, "accept")) {
-                                                try accept.append(core.allocator, header_value);
-                                            } else if (std.ascii.eqlIgnoreCase(header_name, "user-agent")) {
-                                                try env_map.put("HTTP_USER_AGENT", header_value);
-                                            } else if (std.ascii.eqlIgnoreCase(header_name, "connection")) {
-                                                if (std.ascii.eqlIgnoreCase(header_value, "close")) {
-                                                    keep_alive = false;
-                                                }
-                                            } else if (std.ascii.eqlIgnoreCase(header_name, "git-protocol")) {
-                                                try env_map.put("GIT_PROTOCOL", header_value);
+                                        while (http_server.reader.state == .ready) {
+                                            var request = http_server.receiveHead() catch |err| switch (err) {
+                                                error.HttpConnectionClosing => continue :accept,
+                                                else => |e| return e,
+                                            };
+                                            if (std.mem.eql(u8, request.head.target, "/stop-server")) {
+                                                break :accept;
                                             }
-                                        }
 
-                                        const accept_str = try std.mem.join(core.allocator, ",", accept.items);
-                                        defer core.allocator.free(accept_str);
-                                        if (accept_str.len > 0) {
-                                            try env_map.put("HTTP_ACCEPT", accept_str);
-                                        }
+                                            const uri = try std.Uri.parseAfterScheme("", request.head.target);
+                                            if (uri.path.percent_encoded[0] != '/') return error.PathMustStartWithSlash;
+                                            const path = if (std.mem.indexOfScalar(u8, uri.path.percent_encoded[1..], '/')) |idx|
+                                                uri.path.percent_encoded[idx + 1 ..]
+                                            else
+                                                return error.SlashNotFound;
 
-                                        var process = try std.process.spawn(core.io, .{
-                                            .argv = switch (server_repo_kind) {
-                                                .git => &.{ "git", "http-backend" },
-                                                .xit => &.{ "../zig-out/bin/haxy", "http-backend" },
-                                            },
-                                            .cwd = switch (server_repo_kind) {
-                                                .git => .inherit,
-                                                .xit => .{ .path = temp_dir_name },
-                                            },
-                                            .environ_map = &env_map,
-                                            .stdin = .pipe,
-                                            .stdout = .pipe,
-                                            .stderr = .pipe,
-                                        });
-                                        defer process.kill(core.io);
+                                            const cwd_path = try std.process.currentPathAlloc(core.io, core.allocator);
+                                            defer core.allocator.free(cwd_path);
+                                            const temp_dir_path = try std.fs.path.join(core.allocator, &.{ cwd_path, core.temp_dir_name });
+                                            defer core.allocator.free(temp_dir_path);
+                                            const path_translated = try std.fmt.allocPrint(core.allocator, "{s}{s}", .{
+                                                temp_dir_path,
+                                                uri.path.percent_encoded,
+                                            });
+                                            defer core.allocator.free(path_translated);
 
-                                        if (request.head.method == .POST) {
-                                            const reader = try request.readerExpectContinue(&.{});
-                                            const request_body = try reader.allocRemaining(core.allocator, .unlimited);
-                                            defer core.allocator.free(request_body);
-                                            try process.stdin.?.writeStreamingAll(core.io, request_body);
-                                        }
-                                        process.stdin.?.close(core.io);
-                                        process.stdin = null;
+                                            // init env map
+                                            var env_map = std.process.Environ.Map.init(core.allocator);
+                                            defer env_map.deinit();
+                                            try env_map.put("GATEWAY_INTERFACE", "CGI/1.1");
+                                            try env_map.put("REQUEST_METHOD", @tagName(request.head.method));
+                                            try env_map.put("PATH_INFO", path);
+                                            try env_map.put("PATH_TRANSLATED", path_translated);
+                                            if (uri.query) |query| {
+                                                try env_map.put("QUERY_STRING", query.percent_encoded);
+                                            }
 
-                                        var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-                                        var multi_reader: std.Io.File.MultiReader = undefined;
-                                        multi_reader.init(core.allocator, core.io, multi_reader_buffer.toStreams(), &.{ process.stdout.?, process.stderr.? });
-                                        defer multi_reader.deinit();
+                                            var accept: std.ArrayList([]const u8) = .empty;
+                                            defer accept.deinit(core.allocator);
 
-                                        while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
-                                            error.EndOfStream => {},
-                                            else => |e| return e,
-                                        }
+                                            var keep_alive = true; // HTTP 1.1 defaults to keep-alive
 
-                                        try multi_reader.checkAnyError();
+                                            // iterate over headers to fill env map
+                                            var req_header_it = request.iterateHeaders();
+                                            while (req_header_it.next()) |header| {
+                                                const header_name = header.name;
+                                                const header_value = header.value;
 
-                                        _ = try process.wait(core.io);
+                                                if (std.ascii.eqlIgnoreCase(header_name, "content-type")) {
+                                                    try env_map.put("CONTENT_TYPE", header_value);
+                                                } else if (std.ascii.eqlIgnoreCase(header_name, "content-length")) {
+                                                    try env_map.put("CONTENT_LENGTH", header_value);
+                                                } else if (std.ascii.eqlIgnoreCase(header_name, "referer")) {
+                                                    try env_map.put("HTTP_REFERER", header_value);
+                                                } else if (std.ascii.eqlIgnoreCase(header_name, "accept")) {
+                                                    try accept.append(core.allocator, header_value);
+                                                } else if (std.ascii.eqlIgnoreCase(header_name, "user-agent")) {
+                                                    try env_map.put("HTTP_USER_AGENT", header_value);
+                                                } else if (std.ascii.eqlIgnoreCase(header_name, "connection")) {
+                                                    if (std.ascii.eqlIgnoreCase(header_value, "close")) {
+                                                        keep_alive = false;
+                                                    }
+                                                } else if (std.ascii.eqlIgnoreCase(header_name, "git-protocol")) {
+                                                    try env_map.put("GIT_PROTOCOL", header_value);
+                                                }
+                                            }
 
-                                        const stdout_slice = try multi_reader.toOwnedSlice(0);
-                                        defer core.allocator.free(stdout_slice);
-                                        const stderr_slice = try multi_reader.toOwnedSlice(1);
-                                        defer core.allocator.free(stderr_slice);
+                                            const accept_str = try std.mem.join(core.allocator, ",", accept.items);
+                                            defer core.allocator.free(accept_str);
+                                            if (accept_str.len > 0) {
+                                                try env_map.put("HTTP_ACCEPT", accept_str);
+                                            }
 
-                                        // transition the http state machine so it can
-                                        // read the next request on this connection
-                                        if (http_server.reader.state == .received_head) {
-                                            http_server.reader.state = .ready;
-                                        }
+                                            var process = try std.process.spawn(core.io, .{
+                                                .argv = switch (server_repo_kind) {
+                                                    .git => &.{ "git", "http-backend" },
+                                                    .xit => &.{ "../zig-out/bin/haxy", "http-backend" },
+                                                },
+                                                .cwd = switch (server_repo_kind) {
+                                                    .git => .inherit,
+                                                    .xit => .{ .path = temp_dir_name },
+                                                },
+                                                .environ_map = &env_map,
+                                                .stdin = .pipe,
+                                                .stdout = .pipe,
+                                                .stderr = .pipe,
+                                            });
+                                            defer process.kill(core.io);
 
-                                        if (stderr_slice.len > 0) {
-                                            std.debug.print("Error from git-http-backend:\n{s}\n", .{stderr_slice});
-                                            try http_server.out.writeAll("HTTP/1.1 500 Internal Server Error\r\n\r\n");
-                                        } else {
-                                            try http_server.out.writeAll("HTTP/1.1 200 OK\r\n");
-                                            const double_newline = "\r\n\r\n";
-                                            const double_newline_idx = std.mem.indexOf(u8, stdout_slice, double_newline) orelse unreachable;
-                                            try http_server.out.writeAll(stdout_slice[0..double_newline_idx]);
-                                            try http_server.out.print("\r\nContent-Length: {}", .{stdout_slice.len - (double_newline_idx + double_newline.len)});
-                                            try http_server.out.writeAll(stdout_slice[double_newline_idx..]);
-                                        }
-                                        try http_server.out.flush();
+                                            if (request.head.method == .POST) {
+                                                const reader = try request.readerExpectContinue(&.{});
+                                                const request_body = try reader.allocRemaining(core.allocator, .unlimited);
+                                                defer core.allocator.free(request_body);
+                                                try process.stdin.?.writeStreamingAll(core.io, request_body);
+                                            }
+                                            process.stdin.?.close(core.io);
+                                            process.stdin = null;
 
-                                        if (!keep_alive) {
-                                            continue :accept;
+                                            var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+                                            var multi_reader: std.Io.File.MultiReader = undefined;
+                                            multi_reader.init(core.allocator, core.io, multi_reader_buffer.toStreams(), &.{ process.stdout.?, process.stderr.? });
+                                            defer multi_reader.deinit();
+
+                                            while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+                                                error.EndOfStream => {},
+                                                else => |e| return e,
+                                            }
+
+                                            try multi_reader.checkAnyError();
+
+                                            _ = try process.wait(core.io);
+
+                                            const stdout_slice = try multi_reader.toOwnedSlice(0);
+                                            defer core.allocator.free(stdout_slice);
+                                            const stderr_slice = try multi_reader.toOwnedSlice(1);
+                                            defer core.allocator.free(stderr_slice);
+
+                                            // transition the http state machine so it can
+                                            // read the next request on this connection
+                                            if (http_server.reader.state == .received_head) {
+                                                http_server.reader.state = .ready;
+                                            }
+
+                                            if (stderr_slice.len > 0) {
+                                                std.debug.print("Error from git-http-backend:\n{s}\n", .{stderr_slice});
+                                                try http_server.out.writeAll("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+                                            } else {
+                                                try http_server.out.writeAll("HTTP/1.1 200 OK\r\n");
+                                                const double_newline = "\r\n\r\n";
+                                                const double_newline_idx = std.mem.indexOf(u8, stdout_slice, double_newline) orelse unreachable;
+                                                try http_server.out.writeAll(stdout_slice[0..double_newline_idx]);
+                                                try http_server.out.print("\r\nContent-Length: {}", .{stdout_slice.len - (double_newline_idx + double_newline.len)});
+                                                try http_server.out.writeAll(stdout_slice[double_newline_idx..]);
+                                            }
+                                            try http_server.out.flush();
+
+                                            if (!keep_alive) {
+                                                continue :accept;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        };
-                        self.core.server_thread = try std.Thread.spawn(.{}, ServerHandler.run, .{&self.core});
+                            };
+                            self.core.server_thread = try std.Thread.spawn(.{}, ServerHandler.run, .{&self.core});
+                        }
                     },
                     .raw => unreachable,
                     .ssh => {
@@ -438,11 +479,19 @@ fn Server(
             }
         }
 
-        fn stop(self: *Server(server_repo_kind, transport_def, temp_dir_name, port)) void {
+        fn stop(self: *Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command)) void {
             switch (transport_def) {
                 .file => {},
                 .wire => |wire_kind| switch (wire_kind) {
                     .http => {
+                        if (use_serve_command) {
+                            if (self.core.process) |*process| {
+                                _ = process.kill(self.core.io);
+                                self.core.process = null;
+                            }
+                            return;
+                        }
+
                         var client = std.http.Client{ .io = self.core.io, .allocator = self.core.allocator };
                         defer client.deinit();
                         _ = client.fetch(.{ .location = .{ .url = self.core.stop_server_endpoint } }) catch return;
@@ -464,6 +513,7 @@ fn testFetch(
     comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
+    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -481,7 +531,7 @@ fn testFetch(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port).init(io, allocator);
+    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -634,6 +684,7 @@ fn testPush(
     comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
+    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -651,7 +702,7 @@ fn testPush(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port).init(io, allocator);
+    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -923,6 +974,7 @@ fn testClone(
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     comptime shell_out_to_git: bool,
+    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -940,7 +992,7 @@ fn testClone(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port).init(io, allocator);
+    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -1232,6 +1284,7 @@ fn testFetchLarge(
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     comptime shell_out_to_git: bool,
+    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -1249,7 +1302,7 @@ fn testFetchLarge(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port).init(io, allocator);
+    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -1434,6 +1487,7 @@ fn testPushLarge(
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     comptime shell_out_to_git: bool,
+    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -1451,7 +1505,7 @@ fn testPushLarge(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port).init(io, allocator);
+    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
     try server.start();
     defer server.stop();
 
