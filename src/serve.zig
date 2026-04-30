@@ -5,6 +5,7 @@ const hash = xit.hash;
 
 pub const Options = struct {
     http_listen: []const u8,
+    ssh_listen: ?[]const u8,
     project_root: []const u8,
 };
 
@@ -22,15 +23,52 @@ pub fn run(
     options: Options,
     err: *std.Io.Writer,
 ) !void {
-    const listen_address = try parseListenAddress(options.http_listen);
+    const project_root = try std.fs.path.resolve(allocator, &.{ cwd_path, options.project_root });
+    defer allocator.free(project_root);
+
+    if (options.ssh_listen) |ssh_listen| {
+        const HttpContext = struct {
+            io: std.Io,
+            allocator: std.mem.Allocator,
+            project_root: []const u8,
+            http_listen: []const u8,
+            err: *std.Io.Writer,
+
+            fn run(ctx: @This()) !void {
+                try runHttpListener(repo_kind, any_repo_opts, ctx.io, ctx.allocator, ctx.project_root, ctx.http_listen, ctx.err);
+            }
+        };
+
+        const http_thread = try std.Thread.spawn(.{}, HttpContext.run, .{HttpContext{
+            .io = io,
+            .allocator = allocator,
+            .project_root = project_root,
+            .http_listen = options.http_listen,
+            .err = err,
+        }});
+        defer http_thread.join();
+
+        try runSshListener(repo_kind, any_repo_opts, io, allocator, project_root, ssh_listen, err);
+    } else {
+        try runHttpListener(repo_kind, any_repo_opts, io, allocator, project_root, options.http_listen, err);
+    }
+}
+
+fn runHttpListener(
+    comptime repo_kind: rp.RepoKind,
+    comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    http_listen: []const u8,
+    err: *std.Io.Writer,
+) !void {
+    const listen_address = try parseListenAddress(http_listen);
     const address = try std.Io.net.IpAddress.parseIp4(listen_address.host, listen_address.port);
     var net_server = try address.listen(io, .{ .reuse_address = true });
     defer net_server.deinit(io);
 
-    const project_root = try std.fs.path.resolve(allocator, &.{ cwd_path, options.project_root });
-    defer allocator.free(project_root);
-
-    try err.print("serving HTTP on {s}, project root {s}\n", .{ options.http_listen, project_root });
+    try err.print("serving HTTP on {s}, project root {s}\n", .{ http_listen, project_root });
     try err.flush();
 
     var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
@@ -173,6 +211,163 @@ fn findRoute(path: []const u8) ?struct { xit.net_server_http_backend.HandlerKind
         }
     }
     return null;
+}
+
+const SshService = enum {
+    upload_pack,
+    receive_pack,
+};
+
+const SshRequest = struct {
+    service: SshService,
+    protocol_version: xit.net_server_common.ProtocolVersion,
+    repo: []const u8,
+
+    fn deinit(self: SshRequest, allocator: std.mem.Allocator) void {
+        allocator.free(self.repo);
+    }
+};
+
+fn runSshListener(
+    comptime repo_kind: rp.RepoKind,
+    comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    ssh_listen: []const u8,
+    err: *std.Io.Writer,
+) !void {
+    const listen_address = try parseListenAddress(ssh_listen);
+    const address = try std.Io.net.IpAddress.parseIp4(listen_address.host, listen_address.port);
+    var net_server = try address.listen(io, .{ .reuse_address = true });
+    defer net_server.deinit(io);
+
+    try err.print("serving SSH helper connections on {s}, project root {s}\n", .{ ssh_listen, project_root });
+    try err.flush();
+
+    while (true) {
+        const stream = net_server.accept(io) catch |accept_err| {
+            try err.print("ssh accept failed: {s}\n", .{@errorName(accept_err)});
+            continue;
+        };
+        defer stream.close(io);
+
+        handleSshConnection(repo_kind, any_repo_opts, io, allocator, project_root, stream) catch |request_err| {
+            try err.print("ssh request failed: {s}\n", .{@errorName(request_err)});
+            try err.flush();
+        };
+    }
+}
+
+fn handleSshConnection(
+    comptime repo_kind: rp.RepoKind,
+    comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    stream: std.Io.net.Stream,
+) !void {
+    var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
+    var recv_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
+    var reader = stream.reader(io, &recv_buffer);
+    var writer = stream.writer(io, &send_buffer);
+
+    const request = try readSshRequest(allocator, &reader.interface);
+    defer request.deinit(allocator);
+
+    const repo_path = try resolveSshRepoPath(allocator, project_root, request.repo);
+    defer allocator.free(repo_path);
+
+    if (!isSubPath(project_root, repo_path)) return error.Forbidden;
+
+    if (any_repo_opts.hash) |hash_kind| {
+        var repo = try rp.Repo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind)).open(io, allocator, .{ .path = repo_path });
+        defer repo.deinit(io, allocator);
+        try runSshService(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), &repo, io, allocator, &reader.interface, &writer.interface, request);
+    } else {
+        var any_repo = try rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path });
+        defer any_repo.deinit(io, allocator);
+        switch (any_repo) {
+            inline else => |*repo| {
+                try runSshService(repo.self_repo_kind, repo.self_repo_opts, repo, io, allocator, &reader.interface, &writer.interface, request);
+            },
+        }
+    }
+}
+
+fn runSshService(
+    comptime repo_kind: rp.RepoKind,
+    comptime repo_opts: rp.RepoOpts(repo_kind),
+    repo: *rp.Repo(repo_kind, repo_opts),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    request: SshRequest,
+) !void {
+    switch (request.service) {
+        .upload_pack => try repo.uploadPack(io, allocator, reader, writer, .{
+            .protocol_version = request.protocol_version,
+        }),
+        .receive_pack => try repo.receivePack(io, allocator, reader, writer, .{
+            .protocol_version = request.protocol_version,
+        }),
+    }
+}
+
+fn readSshRequest(allocator: std.mem.Allocator, reader: *std.Io.Reader) !SshRequest {
+    const magic = try readSshPreludeLine(reader);
+    if (!std.mem.eql(u8, magic, "haxy-ssh-helper-v1")) return error.InvalidSshMagic;
+
+    const service_line = try readSshPreludeLine(reader);
+    const service = parseSshService(stripPrefix(service_line, "service=") orelse return error.InvalidSshServiceLine) orelse return error.InvalidSshService;
+
+    const protocol_line = try readSshPreludeLine(reader);
+    const protocol_version = std.meta.stringToEnum(
+        xit.net_server_common.ProtocolVersion,
+        stripPrefix(protocol_line, "protocol=") orelse return error.InvalidSshProtocolLine,
+    ) orelse return error.InvalidSshProtocol;
+
+    const repo_length_line = try readSshPreludeLine(reader);
+    const repo_len = try std.fmt.parseInt(usize, stripPrefix(repo_length_line, "repo-length=") orelse return error.InvalidSshRepoLengthLine, 10);
+
+    const empty_line = try readSshPreludeLine(reader);
+    if (empty_line.len != 0) return error.InvalidSshPreludeTerminator;
+
+    const repo = try reader.readAlloc(allocator, repo_len);
+    errdefer allocator.free(repo);
+
+    return .{
+        .service = service,
+        .protocol_version = protocol_version,
+        .repo = repo,
+    };
+}
+
+fn readSshPreludeLine(reader: *std.Io.Reader) ![]const u8 {
+    return (try reader.takeDelimiter('\n')) orelse error.InvalidSshHelperRequest;
+}
+
+fn parseSshService(value: []const u8) ?SshService {
+    if (std.mem.eql(u8, value, "upload-pack")) return .upload_pack;
+    if (std.mem.eql(u8, value, "receive-pack")) return .receive_pack;
+    return null;
+}
+
+fn stripPrefix(value: []const u8, prefix: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, value, prefix)) return null;
+    return value[prefix.len..];
+}
+
+fn resolveSshRepoPath(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    repo: []const u8,
+) ![]const u8 {
+    if (std.fs.path.isAbsolute(repo)) {
+        return try std.fs.path.resolve(allocator, &.{repo});
+    }
+    return try std.fs.path.resolve(allocator, &.{ project_root, repo });
 }
 
 fn parseListenAddress(value: []const u8) !ListenAddress {

@@ -4,6 +4,7 @@ const xit = @import("xit");
 const rp = xit.repo;
 const cmd = @import("./command.zig");
 const serve = @import("./serve.zig");
+const ssh_helper = @import("./ssh_helper.zig");
 
 pub const RunOpts = struct {
     out: *std.Io.Writer,
@@ -77,8 +78,17 @@ pub fn run(
             if (cli_cmd == .serve) {
                 try serve.run(repo_kind, any_repo_opts, io, allocator, cwd_path, .{
                     .http_listen = cli_cmd.serve.http_listen,
+                    .ssh_listen = cli_cmd.serve.ssh_listen,
                     .project_root = cli_cmd.serve.project_root,
                 }, run_opts.err);
+                return;
+            }
+            if (cli_cmd == .ssh_helper) {
+                try ssh_helper.run(io, allocator, .{
+                    .ssh_connect = cli_cmd.ssh_helper.ssh_connect,
+                    .service = cli_cmd.ssh_helper.service,
+                    .dir = cli_cmd.ssh_helper.dir,
+                }, run_opts.environ_map);
                 return;
             }
 
@@ -93,6 +103,7 @@ pub fn run(
                     return;
                 },
                 .serve => unreachable,
+                .ssh_helper => unreachable,
             };
             defer allocator.free(work_path);
 
@@ -178,5 +189,6 @@ fn runCommand(
             });
         },
         .serve => unreachable,
+        .ssh_helper => unreachable,
     }
 }

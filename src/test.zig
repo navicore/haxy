@@ -14,6 +14,7 @@ test "fetch small" {
     try testFetch(.xit, .xit, .{ .wire = .http }, 3005, true, io, allocator);
     if (.windows != builtin.os.tag) {
         try testFetch(.xit, .xit, .{ .wire = .ssh }, 3006, false, io, allocator);
+        try testFetch(.xit, .xit, .{ .wire = .ssh }, 3007, true, io, allocator);
     }
 }
 
@@ -24,64 +25,69 @@ test "push small" {
     try testPush(.xit, .xit, .{ .wire = .http }, 3011, true, io, allocator);
     if (.windows != builtin.os.tag) {
         try testPush(.xit, .xit, .{ .wire = .ssh }, 3012, false, io, allocator);
+        try testPush(.xit, .xit, .{ .wire = .ssh }, 3013, true, io, allocator);
     }
 }
 
 test "clone small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testClone(.xit, .xit, .{ .wire = .http }, 3016, false, false, io, allocator);
-    try testClone(.xit, .xit, .{ .wire = .http }, 3017, false, true, io, allocator);
+    try testClone(.xit, .xit, .{ .wire = .http }, 3020, false, false, io, allocator);
+    try testClone(.xit, .xit, .{ .wire = .http }, 3021, false, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testClone(.xit, .xit, .{ .wire = .ssh }, 3018, false, false, io, allocator);
+        try testClone(.xit, .xit, .{ .wire = .ssh }, 3022, false, false, io, allocator);
+        try testClone(.xit, .xit, .{ .wire = .ssh }, 3023, false, true, io, allocator);
     }
 }
 
 test "clone small subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testClone(.git, .xit, .{ .wire = .http }, 3031, true, false, io, allocator);
-    try testClone(.git, .xit, .{ .wire = .http }, 3032, true, true, io, allocator);
+    try testClone(.git, .xit, .{ .wire = .http }, 3030, true, false, io, allocator);
+    try testClone(.git, .xit, .{ .wire = .http }, 3031, true, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testClone(.git, .xit, .{ .wire = .ssh }, 3033, true, false, io, allocator);
+        try testClone(.git, .xit, .{ .wire = .ssh }, 3032, true, false, io, allocator);
+        try testClone(.git, .xit, .{ .wire = .ssh }, 3033, true, true, io, allocator);
     }
 }
 
 test "fetch large" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetchLarge(.git, .git, .{ .wire = .http }, 3019, false, false, io, allocator);
+    try testFetchLarge(.git, .git, .{ .wire = .http }, 3040, false, false, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetchLarge(.git, .git, .{ .wire = .ssh }, 3021, false, false, io, allocator);
+        try testFetchLarge(.git, .git, .{ .wire = .ssh }, 3041, false, false, io, allocator);
     }
 }
 
 test "fetch large subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3022, true, false, io, allocator);
-    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3023, true, true, io, allocator);
+    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3050, true, false, io, allocator);
+    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3051, true, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3024, true, false, io, allocator);
+        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3052, true, false, io, allocator);
+        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3053, true, true, io, allocator);
     }
 }
 
 test "push large" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPushLarge(.git, .git, .{ .wire = .http }, 3025, false, false, io, allocator);
+    try testPushLarge(.git, .git, .{ .wire = .http }, 3060, false, false, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPushLarge(.git, .git, .{ .wire = .ssh }, 3027, false, false, io, allocator);
+        try testPushLarge(.git, .git, .{ .wire = .ssh }, 3061, false, false, io, allocator);
     }
 }
 
-test "git push large subprocess" {
+test "push large subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPushLarge(.git, .xit, .{ .wire = .http }, 3028, true, false, io, allocator);
-    try testPushLarge(.git, .xit, .{ .wire = .http }, 3029, true, true, io, allocator);
+    try testPushLarge(.git, .xit, .{ .wire = .http }, 3070, true, false, io, allocator);
+    try testPushLarge(.git, .xit, .{ .wire = .http }, 3071, true, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3030, true, false, io, allocator);
+        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3072, true, false, io, allocator);
+        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3073, true, true, io, allocator);
     }
 }
 
@@ -111,7 +117,12 @@ fn Server(
                     server_thread: std.Thread,
                 },
                 .raw => unreachable,
-                .ssh => struct {
+                .ssh => if (use_serve_command) struct {
+                    io: std.Io,
+                    allocator: std.mem.Allocator,
+                    sshd_process: ?std.process.Child,
+                    serve_process: ?std.process.Child,
+                } else struct {
                     io: std.Io,
                     process: ?std.process.Child,
                 },
@@ -263,9 +274,23 @@ fn Server(
                             }
                         }
 
-                        return .{
-                            .core = .{ .io = io, .process = null },
-                        };
+                        if (use_serve_command) {
+                            comptime {
+                                std.debug.assert(server_repo_kind == .xit);
+                            }
+                            return .{
+                                .core = .{
+                                    .io = io,
+                                    .allocator = allocator,
+                                    .sshd_process = null,
+                                    .serve_process = null,
+                                },
+                            };
+                        } else {
+                            return .{
+                                .core = .{ .io = io, .process = null },
+                            };
+                        }
                     },
                 },
             }
@@ -453,14 +478,55 @@ fn Server(
                     },
                     .raw => unreachable,
                     .ssh => {
-                        std.debug.assert(self.core.process == null);
-                        self.core.process = try std.process.spawn(self.core.io, .{
-                            .argv = &.{"./sshd.sh"},
-                            .cwd = .{ .path = temp_dir_name },
-                            .stdin = .pipe,
-                            .stdout = .ignore,
-                            .stderr = .ignore,
-                        });
+                        if (use_serve_command) {
+                            std.debug.assert(self.core.sshd_process == null);
+                            std.debug.assert(self.core.serve_process == null);
+
+                            const cwd_path = try std.process.currentPathAlloc(self.core.io, self.core.allocator);
+                            defer self.core.allocator.free(cwd_path);
+                            const haxy_path = try std.fs.path.join(self.core.allocator, &.{ cwd_path, "zig-out/bin/haxy" });
+                            defer self.core.allocator.free(haxy_path);
+                            const ssh_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 1000});
+                            const http_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 2000});
+
+                            self.core.serve_process = try std.process.spawn(self.core.io, .{
+                                .argv = &.{ haxy_path, "serve", "--http-listen", http_listen_arg, "--ssh-listen", ssh_listen_arg, "--project-root", temp_dir_name },
+                                .stdin = .ignore,
+                                .stdout = .ignore,
+                                .stderr = .ignore,
+                            });
+
+                            const serve_address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port + 1000);
+                            for (0..50) |_| {
+                                const stream = serve_address.connect(self.core.io, .{ .mode = .stream }) catch {
+                                    try std.Io.sleep(self.core.io, .fromMilliseconds(100), .real);
+                                    continue;
+                                };
+                                var probe_buf = [_]u8{0} ** 16;
+                                var probe_writer = stream.writer(self.core.io, &probe_buf);
+                                try probe_writer.interface.writeAll("probe\n");
+                                try probe_writer.interface.flush();
+                                stream.close(self.core.io);
+                                break;
+                            }
+
+                            self.core.sshd_process = try std.process.spawn(self.core.io, .{
+                                .argv = &.{"./sshd.sh"},
+                                .cwd = .{ .path = temp_dir_name },
+                                .stdin = .pipe,
+                                .stdout = .ignore,
+                                .stderr = .ignore,
+                            });
+                        } else {
+                            std.debug.assert(self.core.process == null);
+                            self.core.process = try std.process.spawn(self.core.io, .{
+                                .argv = &.{"./sshd.sh"},
+                                .cwd = .{ .path = temp_dir_name },
+                                .stdin = .pipe,
+                                .stdout = .ignore,
+                                .stderr = .ignore,
+                            });
+                        }
                     },
                 },
             }
@@ -499,12 +565,57 @@ fn Server(
                     },
                     .raw => unreachable,
                     .ssh => {
-                        _ = self.core.process.?.kill(self.core.io);
-                        self.core.process = null;
+                        if (use_serve_command) {
+                            if (self.core.sshd_process) |*process| {
+                                _ = process.kill(self.core.io);
+                                self.core.sshd_process = null;
+                            }
+                            if (self.core.serve_process) |*process| {
+                                _ = process.kill(self.core.io);
+                                self.core.serve_process = null;
+                            }
+                        } else {
+                            _ = self.core.process.?.kill(self.core.io);
+                            self.core.process = null;
+                        }
                     },
                 },
             }
         }
+    };
+}
+
+fn uploadPackCommand(
+    comptime server_repo_kind: rp.RepoKind,
+    comptime is_ssh: bool,
+    comptime use_serve_command: bool,
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    comptime port: u16,
+) ![]const u8 {
+    return switch (server_repo_kind) {
+        .xit => if (is_ssh and use_serve_command)
+            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy ssh-helper --ssh-connect 127.0.0.1:{} --service upload-pack", .{ cwd_path, port + 1000 })
+        else
+            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy upload-pack", .{cwd_path}),
+        .git => allocator.dupe(u8, "git-upload-pack"),
+    };
+}
+
+fn receivePackCommand(
+    comptime server_repo_kind: rp.RepoKind,
+    comptime is_ssh: bool,
+    comptime use_serve_command: bool,
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    comptime port: u16,
+) ![]const u8 {
+    return switch (server_repo_kind) {
+        .xit => if (is_ssh and use_serve_command)
+            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy ssh-helper --ssh-connect 127.0.0.1:{} --service receive-pack", .{ cwd_path, port + 1000 })
+        else
+            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy receive-pack", .{cwd_path}),
+        .git => allocator.dupe(u8, "git-receive-pack"),
     };
 }
 
@@ -616,10 +727,7 @@ fn testFetch(
     } else null;
     defer if (ssh_cmd_maybe) |ssh_cmd| allocator.free(ssh_cmd);
 
-    const upload_pack_command = try switch (server_repo_kind) {
-        .xit => std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy upload-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-upload-pack"),
-    };
+    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
 
     try client_repo.fetch(
@@ -790,15 +898,9 @@ fn testPush(
     } else null;
     defer if (ssh_cmd_maybe) |ssh_cmd| allocator.free(ssh_cmd);
 
-    const upload_pack_command = try switch (server_repo_kind) {
-        .xit => std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy upload-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-upload-pack"),
-    };
+    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
-    const receive_pack_command = try switch (server_repo_kind) {
-        .xit => std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy receive-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-receive-pack"),
-    };
+    const receive_pack_command = try receivePackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
     defer allocator.free(receive_pack_command);
 
     try client_repo.push(
@@ -1070,10 +1172,7 @@ fn testClone(
         .wire => |wire_kind| .ssh == wire_kind,
     };
 
-    const upload_pack_command = try switch (server_repo_kind) {
-        .xit => std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy upload-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-upload-pack"),
-    };
+    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
 
     if (shell_out_to_git) {
@@ -1377,10 +1476,7 @@ fn testFetchLarge(
         .wire => |wire_kind| .ssh == wire_kind,
     };
 
-    const upload_pack_command = try switch (server_repo_kind) {
-        .xit => std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy upload-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-upload-pack"),
-    };
+    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
 
     if (shell_out_to_git) {
@@ -1617,10 +1713,7 @@ fn testPushLarge(
         .wire => |wire_kind| .ssh == wire_kind,
     };
 
-    const receive_pack_command = try switch (server_repo_kind) {
-        .xit => std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy receive-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-receive-pack"),
-    };
+    const receive_pack_command = try receivePackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
     defer allocator.free(receive_pack_command);
 
     if (shell_out_to_git) {

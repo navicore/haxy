@@ -8,6 +8,7 @@ pub const CommandKind = enum {
     receive_pack,
     http_backend,
     serve,
+    ssh_helper,
 };
 
 const Help = struct {
@@ -48,10 +49,19 @@ fn commandHelp(command_kind: CommandKind) Help {
         .serve => .{
             .name = "serve",
             .descrip =
-            \\a long-running HTTP server forwarding receive-pack and upload-pack.
+            \\a long-running server forwarding receive-pack and upload-pack.
             ,
             .example =
-            \\haxy serve --http-listen 127.0.0.1:8080 --project-root /srv/git
+            \\haxy serve --http-listen 127.0.0.1:8080 --ssh-listen 127.0.0.1:8081 --project-root /srv/git
+            ,
+        },
+        .ssh_helper => .{
+            .name = "ssh-helper",
+            .descrip =
+            \\a helper run by sshd that forwards Git SSH service requests to serve.
+            ,
+            .example =
+            \\haxy ssh-helper --ssh-connect 127.0.0.1:8081 --service upload-pack <directory>
             ,
         },
     };
@@ -115,7 +125,10 @@ pub const CommandArgs = struct {
     // must be included here
     const value_flags = std.StaticStringMap(void).initComptime(.{
         .{"--http-listen"},
+        .{"--ssh-listen"},
+        .{"--ssh-connect"},
         .{"--project-root"},
+        .{"--service"},
     });
 
     pub fn init(allocator: std.mem.Allocator, args: []const []const u8) !CommandArgs {
@@ -218,7 +231,13 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
         http_backend,
         serve: struct {
             http_listen: []const u8,
+            ssh_listen: ?[]const u8,
             project_root: []const u8,
+        },
+        ssh_helper: struct {
+            ssh_connect: []const u8,
+            service: ?[]const u8,
+            dir: ?[]const u8,
         },
 
         pub fn initMaybe(cmd_args: *CommandArgs) !?Command(repo_kind, hash_kind) {
@@ -257,7 +276,17 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
 
                     return .{ .serve = .{
                         .http_listen = (cmd_args.get("--http-listen") orelse null) orelse "127.0.0.1:8080",
+                        .ssh_listen = (cmd_args.get("--ssh-listen") orelse null),
                         .project_root = (cmd_args.get("--project-root") orelse null) orelse ".",
+                    } };
+                },
+                .ssh_helper => {
+                    if (cmd_args.positional_args.len > 1) return null;
+
+                    return .{ .ssh_helper = .{
+                        .ssh_connect = (cmd_args.get("--ssh-connect") orelse null) orelse "127.0.0.1:8081",
+                        .service = (cmd_args.get("--service") orelse null),
+                        .dir = if (cmd_args.positional_args.len == 1) cmd_args.positional_args[0] else null,
                     } };
                 },
             }
