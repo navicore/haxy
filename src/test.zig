@@ -29,6 +29,15 @@ test "push small" {
     }
 }
 
+test "push creates missing repo under serve" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    try testPushCreatesMissingRepo(.xit, .xit, .{ .wire = .http }, 3014, io, allocator);
+    if (.windows != builtin.os.tag) {
+        try testPushCreatesMissingRepo(.xit, .xit, .{ .wire = .ssh }, 3015, io, allocator);
+    }
+}
+
 test "clone small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
@@ -1068,6 +1077,111 @@ fn testPush(
 
     // make sure push was successful
     try std.testing.expect(null == try server_repo.readRef(io, .{ .kind = .tag, .name = "1.0.0" }));
+}
+
+fn testPushCreatesMissingRepo(
+    comptime repo_kind: rp.RepoKind,
+    comptime server_repo_kind: rp.RepoKind,
+    comptime transport_def: net.TransportDefinition,
+    comptime port: u16,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+) !void {
+    const temp_dir_name = "temp-testnet-push-create";
+
+    const cwd = std.Io.Dir.cwd();
+    var temp_dir_or_err = cwd.openDir(io, temp_dir_name, .{});
+    if (temp_dir_or_err) |*temp_dir| {
+        temp_dir.close(io);
+        try cwd.deleteTree(io, temp_dir_name);
+    } else |_| {}
+    var temp_dir = try cwd.createDirPathOpen(io, temp_dir_name, .{});
+    defer cwd.deleteTree(io, temp_dir_name) catch {};
+    defer temp_dir.close(io);
+
+    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, true).init(io, allocator);
+    try server.start();
+    defer server.stop();
+
+    const cwd_path = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd_path);
+
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    defer allocator.free(server_path);
+
+    const client_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "client" });
+    defer allocator.free(client_path);
+
+    var client_repo = try rp.Repo(repo_kind, .{ .is_test = true }).init(io, allocator, .{ .path = client_path });
+    defer client_repo.deinit(io, allocator);
+
+    const commit1 = blk: {
+        const hello_txt = try client_repo.core.work_dir.createFile(io, "hello.txt", .{ .truncate = true });
+        defer hello_txt.close(io);
+        try hello_txt.writeStreamingAll(io, "hello, world!");
+        try client_repo.add(io, allocator, &.{"hello.txt"});
+        break :blk try client_repo.commit(io, allocator, .{ .message = "let there be light" });
+    };
+
+    _ = try client_repo.addTag(io, allocator, .{ .name = "1.0.0", .message = "hi" });
+
+    {
+        if (.windows == builtin.os.tag) {
+            std.mem.replaceScalar(u8, server_path, '\\', '/');
+        }
+        const separator = if (server_path[0] == '/') "" else "/";
+
+        const remote_url = switch (transport_def) {
+            .file => unreachable,
+            .wire => |wire_kind| switch (wire_kind) {
+                .http => try std.fmt.allocPrint(allocator, "http://localhost:{}/server", .{port}),
+                .raw => unreachable,
+                .ssh => try std.fmt.allocPrint(allocator, "ssh://localhost:{}{s}{s}", .{ port, separator, server_path }),
+            },
+        };
+        defer allocator.free(remote_url);
+
+        try client_repo.addRemote(io, allocator, .{ .name = "origin", .value = remote_url });
+        try client_repo.addConfig(io, allocator, .{ .name = "branch.master.remote", .value = "origin" });
+    }
+
+    const is_ssh = switch (transport_def) {
+        .file => false,
+        .wire => |wire_kind| .ssh == wire_kind,
+    };
+    const ssh_cmd_maybe: ?[]const u8 = if (is_ssh) blk: {
+        const known_hosts_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "known_hosts" });
+        defer allocator.free(known_hosts_path);
+
+        const priv_key_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "key" });
+        defer allocator.free(priv_key_path);
+
+        break :blk try std.fmt.allocPrint(allocator, "ssh -o UserKnownHostsFile=\"{s}\" -o IdentityFile=\"{s}\"", .{ known_hosts_path, priv_key_path });
+    } else null;
+    defer if (ssh_cmd_maybe) |ssh_cmd| allocator.free(ssh_cmd);
+
+    const receive_pack_command = try receivePackCommand(server_repo_kind, is_ssh, true, allocator, cwd_path, port);
+    defer allocator.free(receive_pack_command);
+
+    try client_repo.push(
+        io,
+        allocator,
+        "origin",
+        "master",
+        false,
+        .{ .refspecs = &.{ "refs/tags/1.0.0:refs/tags/1.0.0" }, .wire = .{ .ssh = .{
+            .command = ssh_cmd_maybe,
+            .receive_pack_command = receive_pack_command,
+        } } },
+    );
+
+    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = true }).open(io, allocator, .{ .path = server_path });
+    defer server_repo.deinit(io, allocator);
+
+    try std.testing.expect(null != try server_repo.readRef(io, .{ .kind = .tag, .name = "1.0.0" }));
+
+    const oid_master = (try server_repo.readRef(io, .{ .kind = .head, .name = "master" })).?;
+    try std.testing.expectEqualStrings(&commit1, &oid_master);
 }
 
 fn testClone(

@@ -162,46 +162,42 @@ fn handleRequest(
     }
 
     var body_reader = std.Io.Reader.fixed(body);
-    if (any_repo_opts.hash) |hash_kind| {
-        var repo = try rp.Repo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind)).open(io, allocator, .{ .path = repo_path });
-        defer repo.deinit(io, allocator);
-        try runHttpBackend(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), &repo, io, allocator, &body_reader, http_server.out, request_method, handler, suffix, uri.query, content_type, has_remote_user, protocol_version);
-    } else {
-        var any_repo = try rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path });
-        defer any_repo.deinit(io, allocator);
-        switch (any_repo) {
-            inline else => |*repo| {
-                try runHttpBackend(repo.self_repo_kind, repo.self_repo_opts, repo, io, allocator, &body_reader, http_server.out, request_method, handler, suffix, uri.query, content_type, has_remote_user, protocol_version);
-            },
-        }
-    }
-}
-
-fn runHttpBackend(
-    comptime repo_kind: rp.RepoKind,
-    comptime repo_opts: rp.RepoOpts(repo_kind),
-    repo: *rp.Repo(repo_kind, repo_opts),
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    request_method: std.http.Method,
-    handler: xit.net_server_http_backend.HandlerKind,
-    suffix: []const u8,
-    query: ?std.Uri.Component,
-    content_type: []const u8,
-    has_remote_user: bool,
-    protocol_version: xit.net_server_common.ProtocolVersion,
-) !void {
-    try repo.httpBackend(io, allocator, reader, writer, .http, .{
+    const create_if_missing = isReceivePack(handler, suffix, uri.query);
+    const http_backend_options = xit.net_server_http_backend.Options{
         .request_method = request_method,
         .handler = handler,
         .suffix = suffix,
-        .query_string = if (query) |q| q.percent_encoded else "",
+        .query_string = if (uri.query) |q| q.percent_encoded else "",
         .content_type = content_type,
         .has_remote_user = has_remote_user,
         .protocol_version = protocol_version,
-    });
+    };
+
+    if (any_repo_opts.hash) |hash_kind| {
+        var repo = try openRepo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), io, allocator, repo_path, create_if_missing);
+        defer repo.deinit(io, allocator);
+        try repo.httpBackend(io, allocator, &body_reader, http_server.out, .http, http_backend_options);
+    } else {
+        var any_repo = rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path }) catch |err| switch (err) {
+            error.RepoNotFound => {
+                if (!create_if_missing) return err;
+
+                var repo = try openRepo(repo_kind, any_repo_opts.toRepoOpts(), io, allocator, repo_path, true);
+                defer repo.deinit(io, allocator);
+
+                try repo.httpBackend(io, allocator, &body_reader, http_server.out, .http, http_backend_options);
+                return;
+            },
+            else => |e| return e,
+        };
+        defer any_repo.deinit(io, allocator);
+
+        switch (any_repo) {
+            inline else => |*repo| {
+                try repo.httpBackend(io, allocator, &body_reader, http_server.out, .http, http_backend_options);
+            },
+        }
+    }
 }
 
 fn findRoute(path: []const u8) ?struct { xit.net_server_http_backend.HandlerKind, []const u8 } {
@@ -281,11 +277,21 @@ fn handleSshConnection(
     if (!isSubPath(project_root, repo_path)) return error.Forbidden;
 
     if (any_repo_opts.hash) |hash_kind| {
-        var repo = try rp.Repo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind)).open(io, allocator, .{ .path = repo_path });
+        var repo = try openRepo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), io, allocator, repo_path, request.service == .receive_pack);
         defer repo.deinit(io, allocator);
         try runSshService(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), &repo, io, allocator, &reader.interface, &writer.interface, request);
     } else {
-        var any_repo = try rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path });
+        var any_repo = rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path }) catch |open_err| switch (open_err) {
+            error.RepoNotFound => {
+                if (request.service != .receive_pack) return open_err;
+
+                var repo = try openRepo(repo_kind, any_repo_opts.toRepoOpts(), io, allocator, repo_path, true);
+                defer repo.deinit(io, allocator);
+                try runSshService(repo_kind, any_repo_opts.toRepoOpts(), &repo, io, allocator, &reader.interface, &writer.interface, request);
+                return;
+            },
+            else => |e| return e,
+        };
         defer any_repo.deinit(io, allocator);
         switch (any_repo) {
             inline else => |*repo| {
@@ -313,6 +319,42 @@ fn runSshService(
             .protocol_version = request.protocol_version,
         }),
     }
+}
+
+fn openRepo(
+    comptime repo_kind: rp.RepoKind,
+    comptime repo_opts: rp.RepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo_path: []const u8,
+    create_if_missing: bool,
+) !rp.Repo(repo_kind, repo_opts) {
+    return rp.Repo(repo_kind, repo_opts).open(io, allocator, .{ .path = repo_path }) catch |open_err| switch (open_err) {
+        error.RepoNotFound => {
+            if (!create_if_missing) return open_err;
+
+            var repo = try rp.Repo(repo_kind, repo_opts).init(io, allocator, .{ .path = repo_path });
+            errdefer repo.deinit(io, allocator);
+            try repo.addConfig(io, allocator, .{ .name = "http.receivepack", .value = "true" });
+            try repo.addConfig(io, allocator, .{ .name = "receive.denycurrentbranch", .value = "updateinstead" });
+            return repo;
+        },
+        else => |e| return e,
+    };
+}
+
+fn isReceivePack(
+    handler: xit.net_server_http_backend.HandlerKind,
+    suffix: []const u8,
+    query: ?std.Uri.Component,
+) bool {
+    return switch (handler) {
+        .run_service => std.mem.eql(u8, suffix, "/git-receive-pack"),
+        .get_info_refs => if (query) |q|
+            std.mem.startsWith(u8, q.percent_encoded, "service=git-receive-pack")
+        else
+            false,
+    };
 }
 
 fn readSshRequest(allocator: std.mem.Allocator, reader: *std.Io.Reader) !SshRequest {
