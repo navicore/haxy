@@ -10,102 +10,68 @@ const net = xit.net;
 test "fetch small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetch(.xit, .xit, .{ .wire = .http }, 3004, false, io, allocator);
-    try testFetch(.xit, .xit, .{ .wire = .http }, 3005, true, io, allocator);
+    try testFetch(.xit, .{ .wire = .http }, 3000, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetch(.xit, .xit, .{ .wire = .ssh }, 3006, false, io, allocator);
-        try testFetch(.xit, .xit, .{ .wire = .ssh }, 3007, true, io, allocator);
+        try testFetch(.xit, .{ .wire = .ssh }, 3001, io, allocator);
     }
 }
 
 test "push small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPush(.xit, .xit, .{ .wire = .http }, 3010, false, io, allocator);
-    try testPush(.xit, .xit, .{ .wire = .http }, 3011, true, io, allocator);
+    try testPush(.xit, .{ .wire = .http }, 3010, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPush(.xit, .xit, .{ .wire = .ssh }, 3012, false, io, allocator);
-        try testPush(.xit, .xit, .{ .wire = .ssh }, 3013, true, io, allocator);
+        try testPush(.xit, .{ .wire = .ssh }, 3011, io, allocator);
     }
 }
 
 test "push creates missing repo under serve" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPushCreatesMissingRepo(.xit, .xit, .{ .wire = .http }, 3014, io, allocator);
+    try testPushCreatesMissingRepo(.xit, .{ .wire = .http }, 3020, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPushCreatesMissingRepo(.xit, .xit, .{ .wire = .ssh }, 3015, io, allocator);
+        try testPushCreatesMissingRepo(.xit, .{ .wire = .ssh }, 3021, io, allocator);
     }
 }
 
 test "clone small" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testClone(.xit, .xit, .{ .wire = .http }, 3020, false, false, io, allocator);
-    try testClone(.xit, .xit, .{ .wire = .http }, 3021, false, true, io, allocator);
+    try testClone(.xit, .{ .wire = .http }, 3030, false, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testClone(.xit, .xit, .{ .wire = .ssh }, 3022, false, false, io, allocator);
-        try testClone(.xit, .xit, .{ .wire = .ssh }, 3023, false, true, io, allocator);
+        try testClone(.xit, .{ .wire = .ssh }, 3031, false, io, allocator);
     }
 }
 
 test "clone small subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testClone(.git, .xit, .{ .wire = .http }, 3030, true, false, io, allocator);
-    try testClone(.git, .xit, .{ .wire = .http }, 3031, true, true, io, allocator);
+    try testClone(.git, .{ .wire = .http }, 3040, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testClone(.git, .xit, .{ .wire = .ssh }, 3032, true, false, io, allocator);
-        try testClone(.git, .xit, .{ .wire = .ssh }, 3033, true, true, io, allocator);
+        try testClone(.git, .{ .wire = .ssh }, 3041, true, io, allocator);
     }
 }
-
-test "fetch large" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    try testFetchLarge(.git, .git, .{ .wire = .http }, 3040, false, false, io, allocator);
-    if (.windows != builtin.os.tag) {
-        try testFetchLarge(.git, .git, .{ .wire = .ssh }, 3041, false, false, io, allocator);
-    }
-}
-
 test "fetch large subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3050, true, false, io, allocator);
-    try testFetchLarge(.git, .xit, .{ .wire = .http }, 3051, true, true, io, allocator);
+    try testFetchLarge(.git, .{ .wire = .http }, 3050, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3052, true, false, io, allocator);
-        try testFetchLarge(.git, .xit, .{ .wire = .ssh }, 3053, true, true, io, allocator);
+        try testFetchLarge(.git, .{ .wire = .ssh }, 3051, true, io, allocator);
     }
 }
-
-test "push large" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    try testPushLarge(.git, .git, .{ .wire = .http }, 3060, false, false, io, allocator);
-    if (.windows != builtin.os.tag) {
-        try testPushLarge(.git, .git, .{ .wire = .ssh }, 3061, false, false, io, allocator);
-    }
-}
-
 test "push large subprocess" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    try testPushLarge(.git, .xit, .{ .wire = .http }, 3070, true, false, io, allocator);
-    try testPushLarge(.git, .xit, .{ .wire = .http }, 3071, true, true, io, allocator);
+    try testPushLarge(.git, .{ .wire = .http }, 3060, true, io, allocator);
     if (.windows != builtin.os.tag) {
-        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3072, true, false, io, allocator);
-        try testPushLarge(.git, .xit, .{ .wire = .ssh }, 3073, true, true, io, allocator);
+        try testPushLarge(.git, .{ .wire = .ssh }, 3061, true, io, allocator);
     }
 }
 
 fn Server(
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime temp_dir_name: []const u8,
     comptime port: u16,
-    comptime use_serve_command: bool,
 ) type {
     return struct {
         core: Core,
@@ -113,27 +79,17 @@ fn Server(
         const Core = switch (transport_def) {
             .file => void,
             .wire => |wire_kind| switch (wire_kind) {
-                .http => if (use_serve_command) struct {
+                .http => struct {
                     io: std.Io,
                     allocator: std.mem.Allocator,
                     process: ?std.process.Child,
-                } else struct {
-                    io: std.Io,
-                    allocator: std.mem.Allocator,
-                    temp_dir_name: []const u8,
-                    stop_server_endpoint: []const u8,
-                    net_server: std.Io.net.Server,
-                    server_thread: std.Thread,
                 },
                 .raw => unreachable,
-                .ssh => if (use_serve_command) struct {
+                .ssh => struct {
                     io: std.Io,
                     allocator: std.mem.Allocator,
                     sshd_process: ?std.process.Child,
                     serve_process: ?std.process.Child,
-                } else struct {
-                    io: std.Io,
-                    process: ?std.process.Child,
                 },
             },
         };
@@ -141,37 +97,16 @@ fn Server(
         fn init(
             io: std.Io,
             allocator: std.mem.Allocator,
-        ) !Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command) {
+        ) !Server(transport_def, temp_dir_name, port) {
             switch (transport_def) {
                 .file => return .{ .core = {} },
                 .wire => |wire_kind| switch (wire_kind) {
-                    .http => {
-                        if (use_serve_command) {
-                            comptime {
-                                std.debug.assert(server_repo_kind == .xit);
-                            }
-                            return .{
-                                .core = .{
-                                    .io = io,
-                                    .allocator = allocator,
-                                    .process = null,
-                                },
-                            };
-                        }
-
-                        const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
-                        const net_server = try address.listen(io, .{ .reuse_address = true });
-                        errdefer net_server.deinit(io);
-                        return .{
-                            .core = .{
-                                .io = io,
-                                .allocator = allocator,
-                                .temp_dir_name = temp_dir_name,
-                                .stop_server_endpoint = std.fmt.comptimePrint("http://127.0.0.1:{}/stop-server", .{port}),
-                                .net_server = net_server,
-                                .server_thread = undefined,
-                            },
-                        };
+                    .http => return .{
+                        .core = .{
+                            .io = io,
+                            .allocator = allocator,
+                            .process = null,
+                        },
                     },
                     .raw => unreachable,
                     .ssh => {
@@ -282,265 +217,83 @@ fn Server(
                                 try sshd_file.setPermissions(io, .executable_file);
                             }
                         }
-
-                        if (use_serve_command) {
-                            comptime {
-                                std.debug.assert(server_repo_kind == .xit);
-                            }
-                            return .{
-                                .core = .{
-                                    .io = io,
-                                    .allocator = allocator,
-                                    .sshd_process = null,
-                                    .serve_process = null,
-                                },
-                            };
-                        } else {
-                            return .{
-                                .core = .{ .io = io, .process = null },
-                            };
-                        }
+                        return .{
+                            .core = .{
+                                .io = io,
+                                .allocator = allocator,
+                                .sshd_process = null,
+                                .serve_process = null,
+                            },
+                        };
                     },
                 },
             }
         }
 
-        fn start(self: *Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command)) !void {
+        fn start(self: *Server(transport_def, temp_dir_name, port)) !void {
             switch (transport_def) {
                 .file => {},
                 .wire => |wire_kind| switch (wire_kind) {
                     .http => {
-                        if (use_serve_command) {
-                            std.debug.assert(self.core.process == null);
+                        std.debug.assert(self.core.process == null);
 
-                            const cwd_path = try std.process.currentPathAlloc(self.core.io, self.core.allocator);
-                            defer self.core.allocator.free(cwd_path);
-                            const haxy_path = try std.fs.path.join(self.core.allocator, &.{ cwd_path, "zig-out/bin/haxy" });
-                            defer self.core.allocator.free(haxy_path);
-                            const listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port});
+                        const cwd_path = try std.process.currentPathAlloc(self.core.io, self.core.allocator);
+                        defer self.core.allocator.free(cwd_path);
+                        const haxy_path = try std.fs.path.join(self.core.allocator, &.{ cwd_path, "zig-out/bin/haxy" });
+                        defer self.core.allocator.free(haxy_path);
+                        const listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port});
 
-                            self.core.process = try std.process.spawn(self.core.io, .{
-                                .argv = &.{ haxy_path, "serve", "--http-listen", listen_arg, "--project-root", temp_dir_name },
-                                .stdin = .ignore,
-                                .stdout = .ignore,
-                                .stderr = .ignore,
-                            });
-                        } else {
-                            const ServerHandler = struct {
-                                fn run(core: *Core) !void {
-                                    var send_buffer = [_]u8{0} ** 1024;
-                                    var recv_buffer = [_]u8{0} ** 1024;
-
-                                    accept: while (true) {
-                                        const stream = try core.net_server.accept(core.io);
-                                        defer stream.close(core.io);
-
-                                        var conn_br = stream.reader(core.io, &recv_buffer);
-                                        var conn_bw = stream.writer(core.io, &send_buffer);
-                                        var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
-
-                                        while (http_server.reader.state == .ready) {
-                                            var request = http_server.receiveHead() catch |err| switch (err) {
-                                                error.HttpConnectionClosing => continue :accept,
-                                                else => |e| return e,
-                                            };
-                                            if (std.mem.eql(u8, request.head.target, "/stop-server")) {
-                                                break :accept;
-                                            }
-
-                                            const uri = try std.Uri.parseAfterScheme("", request.head.target);
-                                            if (uri.path.percent_encoded[0] != '/') return error.PathMustStartWithSlash;
-                                            const path = if (std.mem.indexOfScalar(u8, uri.path.percent_encoded[1..], '/')) |idx|
-                                                uri.path.percent_encoded[idx + 1 ..]
-                                            else
-                                                return error.SlashNotFound;
-
-                                            const cwd_path = try std.process.currentPathAlloc(core.io, core.allocator);
-                                            defer core.allocator.free(cwd_path);
-                                            const temp_dir_path = try std.fs.path.join(core.allocator, &.{ cwd_path, core.temp_dir_name });
-                                            defer core.allocator.free(temp_dir_path);
-                                            const path_translated = try std.fmt.allocPrint(core.allocator, "{s}{s}", .{
-                                                temp_dir_path,
-                                                uri.path.percent_encoded,
-                                            });
-                                            defer core.allocator.free(path_translated);
-
-                                            // init env map
-                                            var env_map = std.process.Environ.Map.init(core.allocator);
-                                            defer env_map.deinit();
-                                            try env_map.put("GATEWAY_INTERFACE", "CGI/1.1");
-                                            try env_map.put("REQUEST_METHOD", @tagName(request.head.method));
-                                            try env_map.put("PATH_INFO", path);
-                                            try env_map.put("PATH_TRANSLATED", path_translated);
-                                            if (uri.query) |query| {
-                                                try env_map.put("QUERY_STRING", query.percent_encoded);
-                                            }
-
-                                            var accept: std.ArrayList([]const u8) = .empty;
-                                            defer accept.deinit(core.allocator);
-
-                                            var keep_alive = true; // HTTP 1.1 defaults to keep-alive
-
-                                            // iterate over headers to fill env map
-                                            var req_header_it = request.iterateHeaders();
-                                            while (req_header_it.next()) |header| {
-                                                const header_name = header.name;
-                                                const header_value = header.value;
-
-                                                if (std.ascii.eqlIgnoreCase(header_name, "content-type")) {
-                                                    try env_map.put("CONTENT_TYPE", header_value);
-                                                } else if (std.ascii.eqlIgnoreCase(header_name, "content-length")) {
-                                                    try env_map.put("CONTENT_LENGTH", header_value);
-                                                } else if (std.ascii.eqlIgnoreCase(header_name, "referer")) {
-                                                    try env_map.put("HTTP_REFERER", header_value);
-                                                } else if (std.ascii.eqlIgnoreCase(header_name, "accept")) {
-                                                    try accept.append(core.allocator, header_value);
-                                                } else if (std.ascii.eqlIgnoreCase(header_name, "user-agent")) {
-                                                    try env_map.put("HTTP_USER_AGENT", header_value);
-                                                } else if (std.ascii.eqlIgnoreCase(header_name, "connection")) {
-                                                    if (std.ascii.eqlIgnoreCase(header_value, "close")) {
-                                                        keep_alive = false;
-                                                    }
-                                                } else if (std.ascii.eqlIgnoreCase(header_name, "git-protocol")) {
-                                                    try env_map.put("GIT_PROTOCOL", header_value);
-                                                }
-                                            }
-
-                                            const accept_str = try std.mem.join(core.allocator, ",", accept.items);
-                                            defer core.allocator.free(accept_str);
-                                            if (accept_str.len > 0) {
-                                                try env_map.put("HTTP_ACCEPT", accept_str);
-                                            }
-
-                                            var process = try std.process.spawn(core.io, .{
-                                                .argv = switch (server_repo_kind) {
-                                                    .git => &.{ "git", "http-backend" },
-                                                    .xit => &.{ "../zig-out/bin/haxy", "http-backend" },
-                                                },
-                                                .cwd = switch (server_repo_kind) {
-                                                    .git => .inherit,
-                                                    .xit => .{ .path = temp_dir_name },
-                                                },
-                                                .environ_map = &env_map,
-                                                .stdin = .pipe,
-                                                .stdout = .pipe,
-                                                .stderr = .pipe,
-                                            });
-                                            defer process.kill(core.io);
-
-                                            if (request.head.method == .POST) {
-                                                const reader = try request.readerExpectContinue(&.{});
-                                                const request_body = try reader.allocRemaining(core.allocator, .unlimited);
-                                                defer core.allocator.free(request_body);
-                                                try process.stdin.?.writeStreamingAll(core.io, request_body);
-                                            }
-                                            process.stdin.?.close(core.io);
-                                            process.stdin = null;
-
-                                            var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-                                            var multi_reader: std.Io.File.MultiReader = undefined;
-                                            multi_reader.init(core.allocator, core.io, multi_reader_buffer.toStreams(), &.{ process.stdout.?, process.stderr.? });
-                                            defer multi_reader.deinit();
-
-                                            while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
-                                                error.EndOfStream => {},
-                                                else => |e| return e,
-                                            }
-
-                                            try multi_reader.checkAnyError();
-
-                                            _ = try process.wait(core.io);
-
-                                            const stdout_slice = try multi_reader.toOwnedSlice(0);
-                                            defer core.allocator.free(stdout_slice);
-                                            const stderr_slice = try multi_reader.toOwnedSlice(1);
-                                            defer core.allocator.free(stderr_slice);
-
-                                            // transition the http state machine so it can
-                                            // read the next request on this connection
-                                            if (http_server.reader.state == .received_head) {
-                                                http_server.reader.state = .ready;
-                                            }
-
-                                            if (stderr_slice.len > 0) {
-                                                std.debug.print("Error from git-http-backend:\n{s}\n", .{stderr_slice});
-                                                try http_server.out.writeAll("HTTP/1.1 500 Internal Server Error\r\n\r\n");
-                                            } else {
-                                                try http_server.out.writeAll("HTTP/1.1 200 OK\r\n");
-                                                const double_newline = "\r\n\r\n";
-                                                const double_newline_idx = std.mem.indexOf(u8, stdout_slice, double_newline) orelse unreachable;
-                                                try http_server.out.writeAll(stdout_slice[0..double_newline_idx]);
-                                                try http_server.out.print("\r\nContent-Length: {}", .{stdout_slice.len - (double_newline_idx + double_newline.len)});
-                                                try http_server.out.writeAll(stdout_slice[double_newline_idx..]);
-                                            }
-                                            try http_server.out.flush();
-
-                                            if (!keep_alive) {
-                                                continue :accept;
-                                            }
-                                        }
-                                    }
-                                }
-                            };
-                            self.core.server_thread = try std.Thread.spawn(.{}, ServerHandler.run, .{&self.core});
-                        }
+                        self.core.process = try std.process.spawn(self.core.io, .{
+                            .argv = &.{ haxy_path, "serve", "--http-listen", listen_arg, "--project-root", temp_dir_name },
+                            .stdin = .ignore,
+                            .stdout = .ignore,
+                            .stderr = .ignore,
+                        });
                     },
                     .raw => unreachable,
                     .ssh => {
-                        if (use_serve_command) {
-                            std.debug.assert(self.core.sshd_process == null);
-                            std.debug.assert(self.core.serve_process == null);
+                        std.debug.assert(self.core.sshd_process == null);
+                        std.debug.assert(self.core.serve_process == null);
 
-                            const cwd_path = try std.process.currentPathAlloc(self.core.io, self.core.allocator);
-                            defer self.core.allocator.free(cwd_path);
-                            const haxy_path = try std.fs.path.join(self.core.allocator, &.{ cwd_path, "zig-out/bin/haxy" });
-                            defer self.core.allocator.free(haxy_path);
-                            const ssh_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 1000});
-                            const http_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 2000});
+                        const cwd_path = try std.process.currentPathAlloc(self.core.io, self.core.allocator);
+                        defer self.core.allocator.free(cwd_path);
+                        const haxy_path = try std.fs.path.join(self.core.allocator, &.{ cwd_path, "zig-out/bin/haxy" });
+                        defer self.core.allocator.free(haxy_path);
+                        const ssh_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 1000});
+                        const http_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 2000});
 
-                            self.core.serve_process = try std.process.spawn(self.core.io, .{
-                                .argv = &.{ haxy_path, "serve", "--http-listen", http_listen_arg, "--ssh-listen", ssh_listen_arg, "--project-root", temp_dir_name },
-                                .stdin = .ignore,
-                                .stdout = .ignore,
-                                .stderr = .ignore,
-                            });
+                        self.core.serve_process = try std.process.spawn(self.core.io, .{
+                            .argv = &.{ haxy_path, "serve", "--http-listen", http_listen_arg, "--ssh-listen", ssh_listen_arg, "--project-root", temp_dir_name },
+                            .stdin = .ignore,
+                            .stdout = .ignore,
+                            .stderr = .ignore,
+                        });
 
-                            const serve_address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port + 1000);
-                            for (0..50) |_| {
-                                const stream = serve_address.connect(self.core.io, .{ .mode = .stream }) catch {
-                                    try std.Io.sleep(self.core.io, .fromMilliseconds(100), .real);
-                                    continue;
-                                };
-                                var probe_buf = [_]u8{0} ** 16;
-                                var probe_writer = stream.writer(self.core.io, &probe_buf);
-                                try probe_writer.interface.writeAll("probe\n");
-                                try probe_writer.interface.flush();
-                                stream.close(self.core.io);
-                                break;
-                            }
-
-                            self.core.sshd_process = try std.process.spawn(self.core.io, .{
-                                .argv = &.{"./sshd.sh"},
-                                .cwd = .{ .path = temp_dir_name },
-                                .stdin = .pipe,
-                                .stdout = .ignore,
-                                .stderr = .ignore,
-                            });
-                        } else {
-                            std.debug.assert(self.core.process == null);
-                            self.core.process = try std.process.spawn(self.core.io, .{
-                                .argv = &.{"./sshd.sh"},
-                                .cwd = .{ .path = temp_dir_name },
-                                .stdin = .pipe,
-                                .stdout = .ignore,
-                                .stderr = .ignore,
-                            });
+                        const serve_address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port + 1000);
+                        for (0..50) |_| {
+                            const stream = serve_address.connect(self.core.io, .{ .mode = .stream }) catch {
+                                try std.Io.sleep(self.core.io, .fromMilliseconds(100), .real);
+                                continue;
+                            };
+                            var probe_buf = [_]u8{0} ** 16;
+                            var probe_writer = stream.writer(self.core.io, &probe_buf);
+                            try probe_writer.interface.writeAll("probe\n");
+                            try probe_writer.interface.flush();
+                            stream.close(self.core.io);
+                            break;
                         }
+
+                        self.core.sshd_process = try std.process.spawn(self.core.io, .{
+                            .argv = &.{"./sshd.sh"},
+                            .cwd = .{ .path = temp_dir_name },
+                            .stdin = .pipe,
+                            .stdout = .ignore,
+                            .stderr = .ignore,
+                        });
                     },
                 },
             }
 
-            // wait for server to be ready by polling the port
             if (transport_def == .wire) {
                 const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
                 for (0..50) |_| {
@@ -554,38 +307,23 @@ fn Server(
             }
         }
 
-        fn stop(self: *Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command)) void {
+        fn stop(self: *Server(transport_def, temp_dir_name, port)) void {
             switch (transport_def) {
                 .file => {},
                 .wire => |wire_kind| switch (wire_kind) {
-                    .http => {
-                        if (use_serve_command) {
-                            if (self.core.process) |*process| {
-                                _ = process.kill(self.core.io);
-                                self.core.process = null;
-                            }
-                            return;
-                        }
-
-                        var client = std.http.Client{ .io = self.core.io, .allocator = self.core.allocator };
-                        defer client.deinit();
-                        _ = client.fetch(.{ .location = .{ .url = self.core.stop_server_endpoint } }) catch return;
-                        self.core.server_thread.join();
+                    .http => if (self.core.process) |*process| {
+                        _ = process.kill(self.core.io);
+                        self.core.process = null;
                     },
                     .raw => unreachable,
                     .ssh => {
-                        if (use_serve_command) {
-                            if (self.core.sshd_process) |*process| {
-                                _ = process.kill(self.core.io);
-                                self.core.sshd_process = null;
-                            }
-                            if (self.core.serve_process) |*process| {
-                                _ = process.kill(self.core.io);
-                                self.core.serve_process = null;
-                            }
-                        } else {
-                            _ = self.core.process.?.kill(self.core.io);
-                            self.core.process = null;
+                        if (self.core.sshd_process) |*process| {
+                            _ = process.kill(self.core.io);
+                            self.core.sshd_process = null;
+                        }
+                        if (self.core.serve_process) |*process| {
+                            _ = process.kill(self.core.io);
+                            self.core.serve_process = null;
                         }
                     },
                 },
@@ -595,45 +333,33 @@ fn Server(
 }
 
 fn uploadPackCommand(
-    comptime server_repo_kind: rp.RepoKind,
     comptime is_ssh: bool,
-    comptime use_serve_command: bool,
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
     comptime port: u16,
 ) ![]const u8 {
-    return switch (server_repo_kind) {
-        .xit => if (is_ssh and use_serve_command)
-            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy ssh-helper --ssh-connect 127.0.0.1:{} --service upload-pack", .{ cwd_path, port + 1000 })
-        else
-            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy upload-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-upload-pack"),
-    };
+    return if (is_ssh)
+        std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy ssh-helper --ssh-connect 127.0.0.1:{} --service upload-pack", .{ cwd_path, port + 1000 })
+    else
+        allocator.dupe(u8, "git-upload-pack");
 }
 
 fn receivePackCommand(
-    comptime server_repo_kind: rp.RepoKind,
     comptime is_ssh: bool,
-    comptime use_serve_command: bool,
     allocator: std.mem.Allocator,
     cwd_path: []const u8,
     comptime port: u16,
 ) ![]const u8 {
-    return switch (server_repo_kind) {
-        .xit => if (is_ssh and use_serve_command)
-            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy ssh-helper --ssh-connect 127.0.0.1:{} --service receive-pack", .{ cwd_path, port + 1000 })
-        else
-            std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy receive-pack", .{cwd_path}),
-        .git => allocator.dupe(u8, "git-receive-pack"),
-    };
+    return if (is_ssh)
+        std.fmt.allocPrint(allocator, "{s}/zig-out/bin/haxy ssh-helper --ssh-connect 127.0.0.1:{} --service receive-pack", .{ cwd_path, port + 1000 })
+    else
+        allocator.dupe(u8, "git-receive-pack");
 }
 
 fn testFetch(
     comptime repo_kind: rp.RepoKind,
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
-    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -651,7 +377,7 @@ fn testFetch(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
+    var server = try Server(transport_def, temp_dir_name, port).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -661,7 +387,7 @@ fn testFetch(
     const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
     defer allocator.free(server_path);
 
-    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
     defer server_repo.deinit(io, allocator);
 
     // make a commit
@@ -736,7 +462,7 @@ fn testFetch(
     } else null;
     defer if (ssh_cmd_maybe) |ssh_cmd| allocator.free(ssh_cmd);
 
-    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
+    const upload_pack_command = try uploadPackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
 
     try client_repo.fetch(
@@ -798,10 +524,8 @@ fn testFetch(
 
 fn testPush(
     comptime repo_kind: rp.RepoKind,
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
-    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -819,7 +543,7 @@ fn testPush(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
+    var server = try Server(transport_def, temp_dir_name, port).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -829,7 +553,7 @@ fn testPush(
     const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
     defer allocator.free(server_path);
 
-    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
     defer server_repo.deinit(io, allocator);
 
     // add config
@@ -907,9 +631,9 @@ fn testPush(
     } else null;
     defer if (ssh_cmd_maybe) |ssh_cmd| allocator.free(ssh_cmd);
 
-    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
+    const upload_pack_command = try uploadPackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
-    const receive_pack_command = try receivePackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
+    const receive_pack_command = try receivePackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(receive_pack_command);
 
     try client_repo.push(
@@ -1081,7 +805,6 @@ fn testPush(
 
 fn testPushCreatesMissingRepo(
     comptime repo_kind: rp.RepoKind,
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     io: std.Io,
@@ -1099,7 +822,7 @@ fn testPushCreatesMissingRepo(
     defer cwd.deleteTree(io, temp_dir_name) catch {};
     defer temp_dir.close(io);
 
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, true).init(io, allocator);
+    var server = try Server(transport_def, temp_dir_name, port).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -1160,7 +883,7 @@ fn testPushCreatesMissingRepo(
     } else null;
     defer if (ssh_cmd_maybe) |ssh_cmd| allocator.free(ssh_cmd);
 
-    const receive_pack_command = try receivePackCommand(server_repo_kind, is_ssh, true, allocator, cwd_path, port);
+    const receive_pack_command = try receivePackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(receive_pack_command);
 
     try client_repo.push(
@@ -1169,13 +892,13 @@ fn testPushCreatesMissingRepo(
         "origin",
         "master",
         false,
-        .{ .refspecs = &.{ "refs/tags/1.0.0:refs/tags/1.0.0" }, .wire = .{ .ssh = .{
+        .{ .refspecs = &.{"refs/tags/1.0.0:refs/tags/1.0.0"}, .wire = .{ .ssh = .{
             .command = ssh_cmd_maybe,
             .receive_pack_command = receive_pack_command,
         } } },
     );
 
-    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = true }).open(io, allocator, .{ .path = server_path });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = true }).open(io, allocator, .{ .path = server_path });
     defer server_repo.deinit(io, allocator);
 
     try std.testing.expect(null != try server_repo.readRef(io, .{ .kind = .tag, .name = "1.0.0" }));
@@ -1186,11 +909,9 @@ fn testPushCreatesMissingRepo(
 
 fn testClone(
     comptime repo_kind: rp.RepoKind,
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     comptime shell_out_to_git: bool,
-    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -1208,7 +929,7 @@ fn testClone(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
+    var server = try Server(transport_def, temp_dir_name, port).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -1223,7 +944,7 @@ fn testClone(
 
     // init server repo with default branch name as main
     // is_test must be false when shell_out_to_git so commits get real timestamps (needed for --shallow-since)
-    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = !shell_out_to_git }).init(io, allocator, .{ .path = server_path, .create_default_branch = "main" });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = !shell_out_to_git }).init(io, allocator, .{ .path = server_path, .create_default_branch = "main" });
     defer server_repo.deinit(io, allocator);
 
     if (shell_out_to_git) {
@@ -1286,7 +1007,7 @@ fn testClone(
         .wire => |wire_kind| .ssh == wire_kind,
     };
 
-    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
+    const upload_pack_command = try uploadPackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
 
     if (shell_out_to_git) {
@@ -1493,11 +1214,9 @@ fn testClone(
 
 fn testFetchLarge(
     comptime repo_kind: rp.RepoKind,
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     comptime shell_out_to_git: bool,
-    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -1515,7 +1234,7 @@ fn testFetchLarge(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
+    var server = try Server(transport_def, temp_dir_name, port).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -1525,7 +1244,7 @@ fn testFetchLarge(
     const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
     defer allocator.free(server_path);
 
-    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
     defer server_repo.deinit(io, allocator);
 
     var server_dir = try cwd.openDir(io, server_path, .{});
@@ -1590,7 +1309,7 @@ fn testFetchLarge(
         .wire => |wire_kind| .ssh == wire_kind,
     };
 
-    const upload_pack_command = try uploadPackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
+    const upload_pack_command = try uploadPackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(upload_pack_command);
 
     if (shell_out_to_git) {
@@ -1693,11 +1412,9 @@ fn testFetchLarge(
 
 fn testPushLarge(
     comptime repo_kind: rp.RepoKind,
-    comptime server_repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
     comptime port: u16,
     comptime shell_out_to_git: bool,
-    comptime use_serve_command: bool,
     io: std.Io,
     allocator: std.mem.Allocator,
 ) !void {
@@ -1715,7 +1432,7 @@ fn testPushLarge(
     defer temp_dir.close(io);
 
     // init server
-    var server = try Server(server_repo_kind, transport_def, temp_dir_name, port, use_serve_command).init(io, allocator);
+    var server = try Server(transport_def, temp_dir_name, port).init(io, allocator);
     try server.start();
     defer server.stop();
 
@@ -1725,7 +1442,7 @@ fn testPushLarge(
     const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
     defer allocator.free(server_path);
 
-    var server_repo = try rp.Repo(server_repo_kind, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
     defer server_repo.deinit(io, allocator);
 
     // add config
@@ -1827,7 +1544,7 @@ fn testPushLarge(
         .wire => |wire_kind| .ssh == wire_kind,
     };
 
-    const receive_pack_command = try receivePackCommand(server_repo_kind, is_ssh, use_serve_command, allocator, cwd_path, port);
+    const receive_pack_command = try receivePackCommand(is_ssh, allocator, cwd_path, port);
     defer allocator.free(receive_pack_command);
 
     if (shell_out_to_git) {

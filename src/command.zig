@@ -4,9 +4,6 @@ const rp = xit.repo;
 const hash = xit.hash;
 
 pub const CommandKind = enum {
-    upload_pack,
-    receive_pack,
-    http_backend,
     serve,
     ssh_helper,
 };
@@ -19,33 +16,6 @@ const Help = struct {
 
 fn commandHelp(command_kind: CommandKind) Help {
     return switch (command_kind) {
-        .upload_pack => .{
-            .name = "upload-pack",
-            .descrip =
-            \\send what is fetched from the repository.
-            ,
-            .example =
-            \\haxy upload-pack <directory>
-            ,
-        },
-        .receive_pack => .{
-            .name = "receive-pack",
-            .descrip =
-            \\receive what is pushed into the repository.
-            ,
-            .example =
-            \\haxy receive-pack <directory>
-            ,
-        },
-        .http_backend => .{
-            .name = "http-backend",
-            .descrip =
-            \\a CGI program forwarding receive-pack and upload-pack over HTTP.
-            ,
-            .example =
-            \\haxy http-backend
-            ,
-        },
         .serve => .{
             .name = "serve",
             .descrip =
@@ -220,15 +190,6 @@ pub const CommandArgs = struct {
 /// if any additional allocation needs to be done, the arena inside the cmd args will be used.
 pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKind) type {
     return union(CommandKind) {
-        upload_pack: struct {
-            dir: []const u8,
-            options: xit.net_server_upload_pack.Options,
-        },
-        receive_pack: struct {
-            dir: []const u8,
-            options: xit.net_server_receive_pack.Options,
-        },
-        http_backend,
         serve: struct {
             http_listen: []const u8,
             ssh_listen: ?[]const u8,
@@ -243,34 +204,6 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
         pub fn initMaybe(cmd_args: *CommandArgs) !?Command(repo_kind, hash_kind) {
             const command_kind = cmd_args.command_kind orelse return null;
             switch (command_kind) {
-                .upload_pack => {
-                    if (cmd_args.positional_args.len != 1) return null;
-
-                    return .{ .upload_pack = .{
-                        .dir = cmd_args.positional_args[0],
-                        .options = .{
-                            .advertise_refs = cmd_args.contains("--http-backend-info-refs"),
-                            .is_stateless = cmd_args.contains("--stateless-rpc"),
-                        },
-                    } };
-                },
-                .receive_pack => {
-                    if (cmd_args.positional_args.len != 1) return null;
-
-                    return .{ .receive_pack = .{
-                        .dir = cmd_args.positional_args[0],
-                        .options = .{
-                            .skip_connectivity_check = cmd_args.contains("--skip-connectivity-check"),
-                            .advertise_refs = cmd_args.contains("--http-backend-info-refs"),
-                            .is_stateless = cmd_args.contains("--stateless-rpc"),
-                        },
-                    } };
-                },
-                .http_backend => {
-                    if (cmd_args.positional_args.len != 0) return null;
-
-                    return .http_backend;
-                },
                 .serve => {
                     if (cmd_args.positional_args.len != 0) return null;
 

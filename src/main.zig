@@ -74,121 +74,21 @@ pub fn run(
             },
         },
         .help => |cmd_kind_maybe| try cmd.printHelp(cmd_kind_maybe, run_opts.out),
-        .cli => |cli_cmd| {
-            if (cli_cmd == .serve) {
+        .cli => |cli_cmd| switch (cli_cmd) {
+            .serve => {
                 try serve.run(repo_kind, any_repo_opts, io, allocator, cwd_path, .{
                     .http_listen = cli_cmd.serve.http_listen,
                     .ssh_listen = cli_cmd.serve.ssh_listen,
                     .project_root = cli_cmd.serve.project_root,
                 }, run_opts.err);
-                return;
-            }
-            if (cli_cmd == .ssh_helper) {
+            },
+            .ssh_helper => {
                 try ssh_helper.run(io, allocator, .{
                     .ssh_connect = cli_cmd.ssh_helper.ssh_connect,
                     .service = cli_cmd.ssh_helper.service,
                     .dir = cli_cmd.ssh_helper.dir,
                 }, run_opts.environ_map);
-                return;
-            }
-
-            // some commands allow the path to be specified. for all others, just use the cwd path.
-            const work_path = switch (cli_cmd) {
-                .upload_pack => |upload_pack| try std.fs.path.resolve(allocator, &.{ cwd_path, upload_pack.dir }),
-                .receive_pack => |receive_pack| try std.fs.path.resolve(allocator, &.{ cwd_path, receive_pack.dir }),
-                .http_backend => xit.net_server_http_backend.resolveDir(allocator, cwd_path, run_opts.environ_map) catch {
-                    var http_stdout_buf: [any_repo_opts.buffer_size]u8 = undefined;
-                    var http_stdout_writer = std.Io.File.stdout().writer(io, &http_stdout_buf);
-                    try xit.net_server_http_backend.sendNotFound(&http_stdout_writer.interface);
-                    return;
-                },
-                .serve => unreachable,
-                .ssh_helper => unreachable,
-            };
-            defer allocator.free(work_path);
-
-            if (any_repo_opts.hash) |hash_kind| {
-                var repo = try rp.Repo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind)).open(io, allocator, .{ .path = work_path });
-                defer repo.deinit(io, allocator);
-                try runCommand(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), &repo, io, allocator, cli_cmd, run_opts);
-            } else {
-                // if no hash was specified, use AnyRepo to detect the hash being used
-                var any_repo = try rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = work_path });
-                defer any_repo.deinit(io, allocator);
-                switch (any_repo) {
-                    inline else => |*repo| {
-                        const cmd_maybe = try cmd.Command(repo.self_repo_kind, repo.self_repo_opts.hash).initMaybe(&cmd_args);
-                        try runCommand(repo.self_repo_kind, repo.self_repo_opts, repo, io, allocator, cmd_maybe orelse return error.InvalidCommand, run_opts);
-                    },
-                }
-            }
+            },
         },
-    }
-}
-
-fn runCommand(
-    comptime repo_kind: rp.RepoKind,
-    comptime repo_opts: rp.RepoOpts(repo_kind),
-    repo: *rp.Repo(repo_kind, repo_opts),
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    command: cmd.Command(repo_kind, repo_opts.hash),
-    run_opts: RunOpts,
-) !void {
-    switch (command) {
-        .upload_pack => |upload_pack_cmd| {
-            var options = upload_pack_cmd.options;
-            options.protocol_version = xit.net_server_common.detectProtocolVersion(run_opts.environ_map);
-            var stdin_buf: [repo_opts.net_buffer_size]u8 = undefined;
-            var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buf);
-            var stdout_buf: [repo_opts.net_buffer_size]u8 = undefined;
-            var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
-            try repo.uploadPack(io, allocator, &stdin_reader.interface, &stdout_writer.interface, options);
-        },
-        .receive_pack => |receive_pack_cmd| {
-            var options = receive_pack_cmd.options;
-            options.protocol_version = xit.net_server_common.detectProtocolVersion(run_opts.environ_map);
-            var stdin_buf: [repo_opts.net_buffer_size]u8 = undefined;
-            var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buf);
-            var stdout_buf: [repo_opts.net_buffer_size]u8 = undefined;
-            var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
-            try repo.receivePack(io, allocator, &stdin_reader.interface, &stdout_writer.interface, options);
-        },
-        .http_backend => {
-            const environ_map = run_opts.environ_map;
-            var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-            const path = try xit.net_server_http_backend.resolveRepoPath(environ_map, &path_buf);
-
-            var stdout_buf: [repo_opts.net_buffer_size]u8 = undefined;
-            var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
-
-            const handler, const suffix = for (&xit.net_server_http_backend.routes) |*svc| {
-                if (std.mem.endsWith(u8, path, svc.suffix))
-                    break .{ svc.handler, svc.suffix };
-            } else {
-                try xit.net_server_http_backend.sendNotFound(&stdout_writer.interface);
-                return;
-            };
-
-            const request_method: std.http.Method = blk: {
-                const method_str = environ_map.get("REQUEST_METHOD") orelse break :blk .GET;
-                const method = std.meta.stringToEnum(std.http.Method, method_str) orelse break :blk .GET;
-                break :blk if (method == .HEAD) .GET else method;
-            };
-
-            var stdin_buf: [repo_opts.net_buffer_size]u8 = undefined;
-            var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buf);
-            try repo.httpBackend(io, allocator, &stdin_reader.interface, &stdout_writer.interface, .cgi, .{
-                .request_method = request_method,
-                .handler = handler,
-                .suffix = suffix,
-                .query_string = environ_map.get("QUERY_STRING") orelse "",
-                .content_type = environ_map.get("CONTENT_TYPE") orelse "",
-                .has_remote_user = environ_map.get("REMOTE_USER") != null,
-                .protocol_version = xit.net_server_common.detectProtocolVersion(environ_map),
-            });
-        },
-        .serve => unreachable,
-        .ssh_helper => unreachable,
     }
 }
