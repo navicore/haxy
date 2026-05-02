@@ -244,7 +244,7 @@ fn Server(
                         const listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port});
 
                         self.core.process = try std.process.spawn(self.core.io, .{
-                            .argv = &.{ haxy_path, "serve", "--http-listen", listen_arg, "--project-root", temp_dir_name },
+                            .argv = &.{ haxy_path, "serve", "--http-listen", listen_arg, "--data-dir", temp_dir_name },
                             .stdin = .ignore,
                             .stdout = .ignore,
                             .stderr = .ignore,
@@ -263,7 +263,7 @@ fn Server(
                         const http_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port + 2000});
 
                         self.core.serve_process = try std.process.spawn(self.core.io, .{
-                            .argv = &.{ haxy_path, "serve", "--http-listen", http_listen_arg, "--ssh-listen", ssh_listen_arg, "--project-root", temp_dir_name },
+                            .argv = &.{ haxy_path, "serve", "--http-listen", http_listen_arg, "--ssh-listen", ssh_listen_arg, "--data-dir", temp_dir_name },
                             .stdin = .ignore,
                             .stdout = .ignore,
                             .stderr = .ignore,
@@ -384,7 +384,7 @@ fn testFetch(
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
 
-    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "repos", "server" });
     defer allocator.free(server_path);
 
     var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
@@ -550,7 +550,7 @@ fn testPush(
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
 
-    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "repos", "server" });
     defer allocator.free(server_path);
 
     var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
@@ -829,7 +829,7 @@ fn testPushCreatesMissingRepo(
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
 
-    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "repos", "server" });
     defer allocator.free(server_path);
 
     const client_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "client" });
@@ -939,7 +939,7 @@ fn testClone(
     const temp_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name });
     defer allocator.free(temp_path);
 
-    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "repos", "server" });
     defer allocator.free(server_path);
 
     // init server repo with default branch name as main
@@ -1241,7 +1241,7 @@ fn testFetchLarge(
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
 
-    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "repos", "server" });
     defer allocator.free(server_path);
 
     var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
@@ -1439,7 +1439,7 @@ fn testPushLarge(
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
 
-    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
+    const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "repos", "server" });
     defer allocator.free(server_path);
 
     var server_repo = try rp.Repo(.xit, .{ .is_test = true }).init(io, allocator, .{ .path = server_path });
@@ -1603,7 +1603,7 @@ fn testPushLarge(
         const oid_master = (try server_repo.readRef(io, .{ .kind = .head, .name = "master" })).?;
         try std.testing.expectEqualStrings(&commit2, &oid_master);
 
-        const hello_txt = try temp_dir.openFile(io, "server/hello.txt", .{});
+        const hello_txt = try temp_dir.openFile(io, "repos/server/hello.txt", .{});
         defer hello_txt.close(io);
     }
 }

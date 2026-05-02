@@ -19,7 +19,7 @@ It can't do much right now...it's just a git server at the moment. If you want t
 
 ```
 mkdir server
-./zig-out/bin/haxy serve --http-listen 127.0.0.1:8080 --project-root server
+./zig-out/bin/haxy serve --http-listen 127.0.0.1:8080 --data-dir server
 ```
 
 Then, in another terminal, do this:
@@ -35,7 +35,7 @@ git remote add origin http://127.0.0.1:8080/test
 git push origin HEAD:master
 ```
 
-After that, you'll see your repo in `server/test`. It's MAGIC! Obviously, this is not very useful right now. I'm currently nailing down the git functionality before working on other things like user accounts and the UI.
+After that, you'll see your repo in `server/repos/test`. It's MAGIC! Obviously, this is not very useful right now. I'm currently nailing down the git functionality before working on other things like user accounts and the UI.
 
 ## The longer term vision
 

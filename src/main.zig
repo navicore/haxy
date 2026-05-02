@@ -79,7 +79,7 @@ pub fn run(
                 try serve.run(repo_kind, any_repo_opts, io, allocator, cwd_path, .{
                     .http_listen = cli_cmd.serve.http_listen,
                     .ssh_listen = cli_cmd.serve.ssh_listen,
-                    .project_root = cli_cmd.serve.project_root,
+                    .data_dir = cli_cmd.serve.data_dir,
                 }, run_opts.err);
             },
             .ssh_helper => {

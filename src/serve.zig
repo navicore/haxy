@@ -6,7 +6,7 @@ const hash = xit.hash;
 pub const Options = struct {
     http_listen: []const u8,
     ssh_listen: ?[]const u8,
-    project_root: []const u8,
+    data_dir: []const u8,
 };
 
 const ListenAddress = struct {
@@ -23,34 +23,38 @@ pub fn run(
     options: Options,
     err: *std.Io.Writer,
 ) !void {
-    const project_root = try std.fs.path.resolve(allocator, &.{ cwd_path, options.project_root });
-    defer allocator.free(project_root);
+    const data_dir = try std.fs.path.resolve(allocator, &.{ cwd_path, options.data_dir });
+    defer allocator.free(data_dir);
+    const repo_root = try std.fs.path.resolve(allocator, &.{ data_dir, "repos" });
+    defer allocator.free(repo_root);
+
+    try std.Io.Dir.cwd().createDirPath(io, repo_root);
 
     if (options.ssh_listen) |ssh_listen| {
         const HttpContext = struct {
             io: std.Io,
             allocator: std.mem.Allocator,
-            project_root: []const u8,
+            repo_root: []const u8,
             http_listen: []const u8,
             err: *std.Io.Writer,
 
             fn run(ctx: @This()) !void {
-                try runHttpListener(repo_kind, any_repo_opts, ctx.io, ctx.allocator, ctx.project_root, ctx.http_listen, ctx.err);
+                try runHttpListener(repo_kind, any_repo_opts, ctx.io, ctx.allocator, ctx.repo_root, ctx.http_listen, ctx.err);
             }
         };
 
         const http_thread = try std.Thread.spawn(.{}, HttpContext.run, .{HttpContext{
             .io = io,
             .allocator = allocator,
-            .project_root = project_root,
+            .repo_root = repo_root,
             .http_listen = options.http_listen,
             .err = err,
         }});
         defer http_thread.join();
 
-        try runSshListener(repo_kind, any_repo_opts, io, allocator, project_root, ssh_listen, err);
+        try runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root, ssh_listen, err);
     } else {
-        try runHttpListener(repo_kind, any_repo_opts, io, allocator, project_root, options.http_listen, err);
+        try runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root, options.http_listen, err);
     }
 }
 
@@ -59,7 +63,7 @@ fn runHttpListener(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    project_root: []const u8,
+    repo_root: []const u8,
     http_listen: []const u8,
     err: *std.Io.Writer,
 ) !void {
@@ -68,7 +72,7 @@ fn runHttpListener(
     var net_server = try address.listen(io, .{ .reuse_address = true });
     defer net_server.deinit(io);
 
-    try err.print("serving HTTP on {s}, project root {s}\n", .{ http_listen, project_root });
+    try err.print("serving HTTP on {s}, repo root {s}\n", .{ http_listen, repo_root });
     try err.flush();
 
     var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
@@ -92,7 +96,7 @@ fn runHttpListener(
                 else => |e| return e,
             };
 
-            handleRequest(repo_kind, any_repo_opts, io, allocator, project_root, &http_server, &request) catch |request_err| {
+            handleRequest(repo_kind, any_repo_opts, io, allocator, repo_root, &http_server, &request) catch |request_err| {
                 try err.print("request failed: {s}\n", .{@errorName(request_err)});
                 try err.flush();
                 if (http_server.reader.state == .received_head) {
@@ -111,7 +115,7 @@ fn handleRequest(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    project_root: []const u8,
+    repo_root: []const u8,
     http_server: *std.http.Server,
     request: *std.http.Server.Request,
 ) !void {
@@ -134,10 +138,10 @@ fn handleRequest(
     const repo_rel = try decodeAndValidateRepoPath(allocator, repo_rel_encoded);
     defer allocator.free(repo_rel);
 
-    const repo_path = try std.fs.path.resolve(allocator, &.{ project_root, repo_rel });
+    const repo_path = try std.fs.path.resolve(allocator, &.{ repo_root, repo_rel });
     defer allocator.free(repo_path);
 
-    if (!isSubPath(project_root, repo_path)) {
+    if (!isSubPath(repo_root, repo_path)) {
         if (http_server.reader.state == .received_head) {
             http_server.reader.state = .ready;
         }
@@ -229,7 +233,7 @@ fn runSshListener(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    project_root: []const u8,
+    repo_root: []const u8,
     ssh_listen: []const u8,
     err: *std.Io.Writer,
 ) !void {
@@ -238,7 +242,7 @@ fn runSshListener(
     var net_server = try address.listen(io, .{ .reuse_address = true });
     defer net_server.deinit(io);
 
-    try err.print("serving SSH helper connections on {s}, project root {s}\n", .{ ssh_listen, project_root });
+    try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ ssh_listen, repo_root });
     try err.flush();
 
     while (true) {
@@ -248,7 +252,7 @@ fn runSshListener(
         };
         defer stream.close(io);
 
-        handleSshConnection(repo_kind, any_repo_opts, io, allocator, project_root, stream) catch |request_err| {
+        handleSshConnection(repo_kind, any_repo_opts, io, allocator, repo_root, stream) catch |request_err| {
             try err.print("ssh request failed: {s}\n", .{@errorName(request_err)});
             try err.flush();
         };
@@ -260,7 +264,7 @@ fn handleSshConnection(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    project_root: []const u8,
+    repo_root: []const u8,
     stream: std.Io.net.Stream,
 ) !void {
     var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
@@ -271,10 +275,10 @@ fn handleSshConnection(
     const request = try readSshRequest(allocator, &reader.interface);
     defer request.deinit(allocator);
 
-    const repo_path = try resolveSshRepoPath(allocator, project_root, request.repo);
+    const repo_path = try resolveSshRepoPath(allocator, repo_root, request.repo);
     defer allocator.free(repo_path);
 
-    if (!isSubPath(project_root, repo_path)) return error.Forbidden;
+    if (!isSubPath(repo_root, repo_path)) return error.Forbidden;
 
     if (any_repo_opts.hash) |hash_kind| {
         var repo = try openRepo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), io, allocator, repo_path, request.service == .receive_pack);
@@ -403,13 +407,13 @@ fn stripPrefix(value: []const u8, prefix: []const u8) ?[]const u8 {
 
 fn resolveSshRepoPath(
     allocator: std.mem.Allocator,
-    project_root: []const u8,
+    repo_root: []const u8,
     repo: []const u8,
 ) ![]const u8 {
     if (std.fs.path.isAbsolute(repo)) {
         return try std.fs.path.resolve(allocator, &.{repo});
     }
-    return try std.fs.path.resolve(allocator, &.{ project_root, repo });
+    return try std.fs.path.resolve(allocator, &.{ repo_root, repo });
 }
 
 fn parseListenAddress(value: []const u8) !ListenAddress {

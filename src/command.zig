@@ -22,7 +22,7 @@ fn commandHelp(command_kind: CommandKind) Help {
             \\a long-running server forwarding receive-pack and upload-pack.
             ,
             .example =
-            \\haxy serve --http-listen 127.0.0.1:8080 --ssh-listen 127.0.0.1:8081 --project-root /srv/git
+            \\haxy serve --http-listen 127.0.0.1:8080 --ssh-listen 127.0.0.1:8081 --data-dir /srv/git
             ,
         },
         .ssh_helper => .{
@@ -97,7 +97,7 @@ pub const CommandArgs = struct {
         .{"--http-listen"},
         .{"--ssh-listen"},
         .{"--ssh-connect"},
-        .{"--project-root"},
+        .{"--data-dir"},
         .{"--service"},
     });
 
@@ -193,7 +193,7 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
         serve: struct {
             http_listen: []const u8,
             ssh_listen: ?[]const u8,
-            project_root: []const u8,
+            data_dir: []const u8,
         },
         ssh_helper: struct {
             ssh_connect: []const u8,
@@ -210,7 +210,7 @@ pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKin
                     return .{ .serve = .{
                         .http_listen = (cmd_args.get("--http-listen") orelse null) orelse "127.0.0.1:8080",
                         .ssh_listen = (cmd_args.get("--ssh-listen") orelse null),
-                        .project_root = (cmd_args.get("--project-root") orelse null) orelse ".",
+                        .data_dir = (cmd_args.get("--data-dir") orelse null) orelse ".",
                     } };
                 },
                 .ssh_helper => {
