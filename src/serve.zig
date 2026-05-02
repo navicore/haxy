@@ -30,32 +30,36 @@ pub fn run(
 
     try std.Io.Dir.cwd().createDirPath(io, repo_root);
 
+    const http_listen_address = try parseListenAddress(options.http_listen);
+    const http_address = try std.Io.net.IpAddress.parseIp4(http_listen_address.host, http_listen_address.port);
+    var http_server = try http_address.listen(io, .{ .reuse_address = true });
+    defer http_server.deinit(io);
+
+    try err.print("serving HTTP on {s}, repo root {s}\n", .{ options.http_listen, repo_root });
+    try err.flush();
+
+    var tasks: std.Io.Group = .init;
+    defer tasks.cancel(io);
+
+    runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root, &http_server, &tasks, err);
+
+    var ssh_server: ?std.Io.net.Server = null;
+    defer if (ssh_server) |*server| server.deinit(io);
+
     if (options.ssh_listen) |ssh_listen| {
-        const HttpContext = struct {
-            io: std.Io,
-            allocator: std.mem.Allocator,
-            repo_root: []const u8,
-            http_listen: []const u8,
-            err: *std.Io.Writer,
+        const ssh_listen_address = try parseListenAddress(ssh_listen);
+        const ssh_address = try std.Io.net.IpAddress.parseIp4(ssh_listen_address.host, ssh_listen_address.port);
+        ssh_server = try ssh_address.listen(io, .{ .reuse_address = true });
 
-            fn run(ctx: @This()) !void {
-                try runHttpListener(repo_kind, any_repo_opts, ctx.io, ctx.allocator, ctx.repo_root, ctx.http_listen, ctx.err);
-            }
-        };
+        try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ ssh_listen, repo_root });
+        try err.flush();
 
-        const http_thread = try std.Thread.spawn(.{}, HttpContext.run, .{HttpContext{
-            .io = io,
-            .allocator = allocator,
-            .repo_root = repo_root,
-            .http_listen = options.http_listen,
-            .err = err,
-        }});
-        defer http_thread.join();
-
-        try runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root, ssh_listen, err);
-    } else {
-        try runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root, options.http_listen, err);
+        if (ssh_server) |*server| {
+            runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root, server, &tasks, err);
+        }
     }
+
+    try tasks.await(io);
 }
 
 fn runHttpListener(
@@ -64,53 +68,97 @@ fn runHttpListener(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo_root: []const u8,
-    http_listen: []const u8,
+    net_server: *std.Io.net.Server,
+    tasks: *std.Io.Group,
+    err: *std.Io.Writer,
+) void {
+    const Listener = struct {
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        repo_root: []const u8,
+        net_server: *std.Io.net.Server,
+        tasks: *std.Io.Group,
+        err: *std.Io.Writer,
+
+        fn run(ctx: @This()) void {
+            while (true) {
+                const stream = ctx.net_server.accept(ctx.io) catch |accept_err| {
+                    logError(ctx.err, "accept failed: {s}\n", .{@errorName(accept_err)});
+                    continue;
+                };
+
+                const Connection = struct {
+                    io: std.Io,
+                    allocator: std.mem.Allocator,
+                    repo_root: []const u8,
+                    stream: std.Io.net.Stream,
+                    err: *std.Io.Writer,
+
+                    fn run(conn: @This()) void {
+                        defer conn.stream.close(conn.io);
+                        handleHttpConnection(repo_kind, any_repo_opts, conn.io, conn.allocator, conn.repo_root, conn.stream, conn.err) catch |request_err| {
+                            logError(conn.err, "connection failed: {s}\n", .{@errorName(request_err)});
+                        };
+                    }
+                };
+
+                ctx.tasks.async(ctx.io, Connection.run, .{Connection{
+                    .io = ctx.io,
+                    .allocator = ctx.allocator,
+                    .repo_root = ctx.repo_root,
+                    .stream = stream,
+                    .err = ctx.err,
+                }});
+            }
+        }
+    };
+
+    tasks.async(io, Listener.run, .{Listener{
+        .io = io,
+        .allocator = allocator,
+        .repo_root = repo_root,
+        .net_server = net_server,
+        .tasks = tasks,
+        .err = err,
+    }});
+}
+
+fn handleHttpConnection(
+    comptime repo_kind: rp.RepoKind,
+    comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo_root: []const u8,
+    stream: std.Io.net.Stream,
     err: *std.Io.Writer,
 ) !void {
-    const listen_address = try parseListenAddress(http_listen);
-    const address = try std.Io.net.IpAddress.parseIp4(listen_address.host, listen_address.port);
-    var net_server = try address.listen(io, .{ .reuse_address = true });
-    defer net_server.deinit(io);
-
-    try err.print("serving HTTP on {s}, repo root {s}\n", .{ http_listen, repo_root });
-    try err.flush();
-
     var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
     var recv_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
+    var conn_br = stream.reader(io, &recv_buffer);
+    var conn_bw = stream.writer(io, &send_buffer);
+    var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
 
-    while (true) {
-        const stream = net_server.accept(io) catch |accept_err| {
-            try err.print("accept failed: {s}\n", .{@errorName(accept_err)});
-            continue;
+    while (http_server.reader.state == .ready) {
+        var request = http_server.receiveHead() catch |receive_err| switch (receive_err) {
+            error.HttpConnectionClosing => break,
+            error.ReadFailed => break,
+            else => |e| return e,
         };
-        defer stream.close(io);
 
-        var conn_br = stream.reader(io, &recv_buffer);
-        var conn_bw = stream.writer(io, &send_buffer);
-        var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
-
-        while (http_server.reader.state == .ready) {
-            var request = http_server.receiveHead() catch |receive_err| switch (receive_err) {
-                error.HttpConnectionClosing => break,
-                error.ReadFailed => break,
-                else => |e| return e,
-            };
-
-            handleRequest(repo_kind, any_repo_opts, io, allocator, repo_root, &http_server, &request) catch |request_err| {
-                try err.print("request failed: {s}\n", .{@errorName(request_err)});
-                try err.flush();
-                if (http_server.reader.state == .received_head) {
-                    http_server.reader.state = .ready;
-                }
-                try writeSimpleResponse(&http_server, 500, "Internal Server Error", "text/plain", @errorName(request_err));
-            };
-            try http_server.out.flush();
-            break;
-        }
+        handleHttpGitRequest(repo_kind, any_repo_opts, io, allocator, repo_root, &http_server, &request) catch |request_err| {
+            try err.print("request failed: {s}\n", .{@errorName(request_err)});
+            try err.flush();
+            if (http_server.reader.state == .received_head) {
+                http_server.reader.state = .ready;
+            }
+            try writeSimpleResponse(&http_server, 500, "Internal Server Error", "text/plain", @errorName(request_err));
+        };
+        try http_server.out.flush();
+        break;
     }
 }
 
-fn handleRequest(
+fn handleHttpGitRequest(
     comptime repo_kind: rp.RepoKind,
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
@@ -177,31 +225,11 @@ fn handleRequest(
         .protocol_version = protocol_version,
     };
 
-    if (any_repo_opts.hash) |hash_kind| {
-        var repo = try openRepo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), io, allocator, repo_path, create_if_missing);
-        defer repo.deinit(io, allocator);
-        try repo.httpBackend(io, allocator, &body_reader, http_server.out, .http, http_backend_options);
-    } else {
-        var any_repo = rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path }) catch |err| switch (err) {
-            error.RepoNotFound => {
-                if (!create_if_missing) return err;
-
-                var repo = try openRepo(repo_kind, any_repo_opts.toRepoOpts(), io, allocator, repo_path, true);
-                defer repo.deinit(io, allocator);
-
-                try repo.httpBackend(io, allocator, &body_reader, http_server.out, .http, http_backend_options);
-                return;
-            },
-            else => |e| return e,
-        };
-        defer any_repo.deinit(io, allocator);
-
-        switch (any_repo) {
-            inline else => |*repo| {
-                try repo.httpBackend(io, allocator, &body_reader, http_server.out, .http, http_backend_options);
-            },
-        }
-    }
+    try openRepoAndServe(repo_kind, any_repo_opts, io, allocator, repo_path, create_if_missing, HttpGitService{
+        .body_reader = &body_reader,
+        .writer = http_server.out,
+        .options = http_backend_options,
+    });
 }
 
 fn findRoute(path: []const u8) ?struct { xit.net_server_http_backend.HandlerKind, []const u8 } {
@@ -234,32 +262,62 @@ fn runSshListener(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo_root: []const u8,
-    ssh_listen: []const u8,
+    net_server: *std.Io.net.Server,
+    tasks: *std.Io.Group,
     err: *std.Io.Writer,
-) !void {
-    const listen_address = try parseListenAddress(ssh_listen);
-    const address = try std.Io.net.IpAddress.parseIp4(listen_address.host, listen_address.port);
-    var net_server = try address.listen(io, .{ .reuse_address = true });
-    defer net_server.deinit(io);
+) void {
+    const Listener = struct {
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        repo_root: []const u8,
+        net_server: *std.Io.net.Server,
+        tasks: *std.Io.Group,
+        err: *std.Io.Writer,
 
-    try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ ssh_listen, repo_root });
-    try err.flush();
+        fn run(ctx: @This()) void {
+            while (true) {
+                const stream = ctx.net_server.accept(ctx.io) catch |accept_err| {
+                    logError(ctx.err, "ssh accept failed: {s}\n", .{@errorName(accept_err)});
+                    continue;
+                };
 
-    while (true) {
-        const stream = net_server.accept(io) catch |accept_err| {
-            try err.print("ssh accept failed: {s}\n", .{@errorName(accept_err)});
-            continue;
-        };
-        defer stream.close(io);
+                const Connection = struct {
+                    io: std.Io,
+                    allocator: std.mem.Allocator,
+                    repo_root: []const u8,
+                    stream: std.Io.net.Stream,
+                    err: *std.Io.Writer,
 
-        handleSshConnection(repo_kind, any_repo_opts, io, allocator, repo_root, stream) catch |request_err| {
-            try err.print("ssh request failed: {s}\n", .{@errorName(request_err)});
-            try err.flush();
-        };
-    }
+                    fn run(conn: @This()) void {
+                        defer conn.stream.close(conn.io);
+                        handleSshGitConnection(repo_kind, any_repo_opts, conn.io, conn.allocator, conn.repo_root, conn.stream) catch |request_err| {
+                            logError(conn.err, "ssh request failed: {s}\n", .{@errorName(request_err)});
+                        };
+                    }
+                };
+
+                ctx.tasks.async(ctx.io, Connection.run, .{Connection{
+                    .io = ctx.io,
+                    .allocator = ctx.allocator,
+                    .repo_root = ctx.repo_root,
+                    .stream = stream,
+                    .err = ctx.err,
+                }});
+            }
+        }
+    };
+
+    tasks.async(io, Listener.run, .{Listener{
+        .io = io,
+        .allocator = allocator,
+        .repo_root = repo_root,
+        .net_server = net_server,
+        .tasks = tasks,
+        .err = err,
+    }});
 }
 
-fn handleSshConnection(
+fn handleSshGitConnection(
     comptime repo_kind: rp.RepoKind,
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
@@ -280,48 +338,45 @@ fn handleSshConnection(
 
     if (!isSubPath(repo_root, repo_path)) return error.Forbidden;
 
+    try openRepoAndServe(repo_kind, any_repo_opts, io, allocator, repo_path, request.service == .receive_pack, SshGitService{
+        .reader = &reader.interface,
+        .writer = &writer.interface,
+        .request = request,
+    });
+}
+
+fn openRepoAndServe(
+    comptime repo_kind: rp.RepoKind,
+    comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo_path: []const u8,
+    create_if_missing: bool,
+    service: anytype,
+) !void {
     if (any_repo_opts.hash) |hash_kind| {
-        var repo = try openRepo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), io, allocator, repo_path, request.service == .receive_pack);
+        var repo = try openRepo(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), io, allocator, repo_path, create_if_missing);
         defer repo.deinit(io, allocator);
-        try runSshService(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), &repo, io, allocator, &reader.interface, &writer.interface, request);
+        try service.serve(repo_kind, any_repo_opts.toRepoOptsWithHash(hash_kind), &repo, io, allocator);
     } else {
         var any_repo = rp.AnyRepo(repo_kind, any_repo_opts).open(io, allocator, .{ .path = repo_path }) catch |open_err| switch (open_err) {
             error.RepoNotFound => {
-                if (request.service != .receive_pack) return open_err;
+                if (!create_if_missing) return open_err;
 
                 var repo = try openRepo(repo_kind, any_repo_opts.toRepoOpts(), io, allocator, repo_path, true);
                 defer repo.deinit(io, allocator);
-                try runSshService(repo_kind, any_repo_opts.toRepoOpts(), &repo, io, allocator, &reader.interface, &writer.interface, request);
+                try service.serve(repo_kind, any_repo_opts.toRepoOpts(), &repo, io, allocator);
                 return;
             },
             else => |e| return e,
         };
         defer any_repo.deinit(io, allocator);
+
         switch (any_repo) {
             inline else => |*repo| {
-                try runSshService(repo.self_repo_kind, repo.self_repo_opts, repo, io, allocator, &reader.interface, &writer.interface, request);
+                try service.serve(repo.self_repo_kind, repo.self_repo_opts, repo, io, allocator);
             },
         }
-    }
-}
-
-fn runSshService(
-    comptime repo_kind: rp.RepoKind,
-    comptime repo_opts: rp.RepoOpts(repo_kind),
-    repo: *rp.Repo(repo_kind, repo_opts),
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    request: SshRequest,
-) !void {
-    switch (request.service) {
-        .upload_pack => try repo.uploadPack(io, allocator, reader, writer, .{
-            .protocol_version = request.protocol_version,
-        }),
-        .receive_pack => try repo.receivePack(io, allocator, reader, writer, .{
-            .protocol_version = request.protocol_version,
-        }),
     }
 }
 
@@ -346,6 +401,47 @@ fn openRepo(
         else => |e| return e,
     };
 }
+
+const HttpGitService = struct {
+    body_reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    options: xit.net_server_http_backend.Options,
+
+    fn serve(
+        self: @This(),
+        comptime repo_kind: rp.RepoKind,
+        comptime repo_opts: rp.RepoOpts(repo_kind),
+        repo: *rp.Repo(repo_kind, repo_opts),
+        io: std.Io,
+        allocator: std.mem.Allocator,
+    ) !void {
+        try repo.httpBackend(io, allocator, self.body_reader, self.writer, .http, self.options);
+    }
+};
+
+const SshGitService = struct {
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    request: SshRequest,
+
+    fn serve(
+        self: @This(),
+        comptime repo_kind: rp.RepoKind,
+        comptime repo_opts: rp.RepoOpts(repo_kind),
+        repo: *rp.Repo(repo_kind, repo_opts),
+        io: std.Io,
+        allocator: std.mem.Allocator,
+    ) !void {
+        switch (self.request.service) {
+            .upload_pack => try repo.uploadPack(io, allocator, self.reader, self.writer, .{
+                .protocol_version = self.request.protocol_version,
+            }),
+            .receive_pack => try repo.receivePack(io, allocator, self.reader, self.writer, .{
+                .protocol_version = self.request.protocol_version,
+            }),
+        }
+    }
+};
 
 fn isReceivePack(
     handler: xit.net_server_http_backend.HandlerKind,
@@ -487,4 +583,9 @@ fn writeSimpleResponse(
         "HTTP/1.1 {d} {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\n\r\n{s}",
         .{ code, message, content_type, body.len, body },
     );
+}
+
+fn logError(err: *std.Io.Writer, comptime fmt: []const u8, args: anytype) void {
+    err.print(fmt, args) catch return;
+    err.flush() catch {};
 }
