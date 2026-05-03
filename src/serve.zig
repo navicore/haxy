@@ -39,7 +39,7 @@ pub fn run(
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
 
-        const DB = xit.db.Database(.buffered_file, u160);
+        const DB = xit.xitdb.Database(.buffered_file, u160);
         var db = try DB.init(.{ .io = io, .file = db_file, .buffer = &buffer });
 
         const db_array = try DB.ArrayList(.read_write).init(db.rootCursor());
