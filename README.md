@@ -18,7 +18,7 @@ To build, install zig 0.16.0 and do `zig build` and you'll find the binary at `z
 It can't do much right now...it's just a git server at the moment. If you want to try it out, do this:
 
 ```
-mkdir server
+mkdir -p server
 ./zig-out/bin/haxy serve --http-listen 127.0.0.1:8080 --data-dir server
 ```
 

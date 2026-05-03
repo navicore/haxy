@@ -23,25 +23,52 @@ pub fn run(
     options: Options,
     err: *std.Io.Writer,
 ) !void {
-    const data_dir = try std.fs.path.resolve(allocator, &.{ cwd_path, options.data_dir });
-    defer allocator.free(data_dir);
-    const repo_root = try std.fs.path.resolve(allocator, &.{ data_dir, "repos" });
-    defer allocator.free(repo_root);
+    // create the data dir
 
-    try std.Io.Dir.cwd().createDirPath(io, repo_root);
+    const data_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, options.data_dir });
+    defer allocator.free(data_dir_path);
+
+    const data_dir = try std.Io.Dir.cwd().createDirPathOpen(io, data_dir_path, .{});
+    defer data_dir.close(io);
+
+    // create a db file just as a test for now
+    {
+        const db_file = try data_dir.createFile(io, "db", .{ .truncate = true, .lock = .exclusive, .read = true });
+        defer db_file.close(io);
+
+        var buffer = std.Io.Writer.Allocating.init(allocator);
+        defer buffer.deinit();
+
+        const DB = xit.db.Database(.buffered_file, u160);
+        var db = try DB.init(.{ .io = io, .file = db_file, .buffer = &buffer });
+
+        const db_array = try DB.ArrayList(.read_write).init(db.rootCursor());
+        try db_array.append(.{ .bytes = "this is a test" });
+    }
+
+    // create the repos dir
+
+    const repo_root_path = try std.fs.path.resolve(allocator, &.{ data_dir_path, "repos" });
+    defer allocator.free(repo_root_path);
+
+    try std.Io.Dir.cwd().createDirPath(io, repo_root_path);
+
+    // create http listener
 
     const http_listen_address = try parseListenAddress(options.http_listen);
     const http_address = try std.Io.net.IpAddress.parseIp4(http_listen_address.host, http_listen_address.port);
     var http_server = try http_address.listen(io, .{ .reuse_address = true });
     defer http_server.deinit(io);
 
-    try err.print("serving HTTP on {s}, repo root {s}\n", .{ options.http_listen, repo_root });
+    try err.print("serving HTTP on {s}, repo root {s}\n", .{ options.http_listen, repo_root_path });
     try err.flush();
 
     var tasks: std.Io.Group = .init;
     defer tasks.cancel(io);
 
-    runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root, &http_server, &tasks, err);
+    runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, &http_server, &tasks, err);
+
+    // create ssh listener
 
     var ssh_server: ?std.Io.net.Server = null;
     defer if (ssh_server) |*server| server.deinit(io);
@@ -51,11 +78,11 @@ pub fn run(
         const ssh_address = try std.Io.net.IpAddress.parseIp4(ssh_listen_address.host, ssh_listen_address.port);
         ssh_server = try ssh_address.listen(io, .{ .reuse_address = true });
 
-        try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ ssh_listen, repo_root });
+        try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ ssh_listen, repo_root_path });
         try err.flush();
 
         if (ssh_server) |*server| {
-            runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root, server, &tasks, err);
+            runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, server, &tasks, err);
         }
     }
 
@@ -67,7 +94,7 @@ fn runHttpListener(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root: []const u8,
+    repo_root_path: []const u8,
     net_server: *std.Io.net.Server,
     tasks: *std.Io.Group,
     err: *std.Io.Writer,
@@ -75,7 +102,7 @@ fn runHttpListener(
     const Listener = struct {
         io: std.Io,
         allocator: std.mem.Allocator,
-        repo_root: []const u8,
+        repo_root_path: []const u8,
         net_server: *std.Io.net.Server,
         tasks: *std.Io.Group,
         err: *std.Io.Writer,
@@ -90,13 +117,13 @@ fn runHttpListener(
                 const Connection = struct {
                     io: std.Io,
                     allocator: std.mem.Allocator,
-                    repo_root: []const u8,
+                    repo_root_path: []const u8,
                     stream: std.Io.net.Stream,
                     err: *std.Io.Writer,
 
                     fn run(conn: @This()) void {
                         defer conn.stream.close(conn.io);
-                        handleHttpConnection(repo_kind, any_repo_opts, conn.io, conn.allocator, conn.repo_root, conn.stream, conn.err) catch |request_err| {
+                        handleHttpConnection(repo_kind, any_repo_opts, conn.io, conn.allocator, conn.repo_root_path, conn.stream, conn.err) catch |request_err| {
                             logError(conn.err, "connection failed: {s}\n", .{@errorName(request_err)});
                         };
                     }
@@ -105,7 +132,7 @@ fn runHttpListener(
                 ctx.tasks.async(ctx.io, Connection.run, .{Connection{
                     .io = ctx.io,
                     .allocator = ctx.allocator,
-                    .repo_root = ctx.repo_root,
+                    .repo_root_path = ctx.repo_root_path,
                     .stream = stream,
                     .err = ctx.err,
                 }});
@@ -116,7 +143,7 @@ fn runHttpListener(
     tasks.async(io, Listener.run, .{Listener{
         .io = io,
         .allocator = allocator,
-        .repo_root = repo_root,
+        .repo_root_path = repo_root_path,
         .net_server = net_server,
         .tasks = tasks,
         .err = err,
@@ -128,7 +155,7 @@ fn handleHttpConnection(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root: []const u8,
+    repo_root_path: []const u8,
     stream: std.Io.net.Stream,
     err: *std.Io.Writer,
 ) !void {
@@ -145,7 +172,7 @@ fn handleHttpConnection(
             else => |e| return e,
         };
 
-        handleHttpGitRequest(repo_kind, any_repo_opts, io, allocator, repo_root, &http_server, &request) catch |request_err| {
+        handleHttpGitRequest(repo_kind, any_repo_opts, io, allocator, repo_root_path, &http_server, &request) catch |request_err| {
             try err.print("request failed: {s}\n", .{@errorName(request_err)});
             try err.flush();
             if (http_server.reader.state == .received_head) {
@@ -163,7 +190,7 @@ fn handleHttpGitRequest(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root: []const u8,
+    repo_root_path: []const u8,
     http_server: *std.http.Server,
     request: *std.http.Server.Request,
 ) !void {
@@ -186,10 +213,10 @@ fn handleHttpGitRequest(
     const repo_rel = try decodeAndValidateRepoPath(allocator, repo_rel_encoded);
     defer allocator.free(repo_rel);
 
-    const repo_path = try std.fs.path.resolve(allocator, &.{ repo_root, repo_rel });
+    const repo_path = try std.fs.path.resolve(allocator, &.{ repo_root_path, repo_rel });
     defer allocator.free(repo_path);
 
-    if (!isSubPath(repo_root, repo_path)) {
+    if (!isSubPath(repo_root_path, repo_path)) {
         if (http_server.reader.state == .received_head) {
             http_server.reader.state = .ready;
         }
@@ -261,7 +288,7 @@ fn runSshListener(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root: []const u8,
+    repo_root_path: []const u8,
     net_server: *std.Io.net.Server,
     tasks: *std.Io.Group,
     err: *std.Io.Writer,
@@ -269,7 +296,7 @@ fn runSshListener(
     const Listener = struct {
         io: std.Io,
         allocator: std.mem.Allocator,
-        repo_root: []const u8,
+        repo_root_path: []const u8,
         net_server: *std.Io.net.Server,
         tasks: *std.Io.Group,
         err: *std.Io.Writer,
@@ -284,13 +311,13 @@ fn runSshListener(
                 const Connection = struct {
                     io: std.Io,
                     allocator: std.mem.Allocator,
-                    repo_root: []const u8,
+                    repo_root_path: []const u8,
                     stream: std.Io.net.Stream,
                     err: *std.Io.Writer,
 
                     fn run(conn: @This()) void {
                         defer conn.stream.close(conn.io);
-                        handleSshGitConnection(repo_kind, any_repo_opts, conn.io, conn.allocator, conn.repo_root, conn.stream) catch |request_err| {
+                        handleSshGitConnection(repo_kind, any_repo_opts, conn.io, conn.allocator, conn.repo_root_path, conn.stream) catch |request_err| {
                             logError(conn.err, "ssh request failed: {s}\n", .{@errorName(request_err)});
                         };
                     }
@@ -299,7 +326,7 @@ fn runSshListener(
                 ctx.tasks.async(ctx.io, Connection.run, .{Connection{
                     .io = ctx.io,
                     .allocator = ctx.allocator,
-                    .repo_root = ctx.repo_root,
+                    .repo_root_path = ctx.repo_root_path,
                     .stream = stream,
                     .err = ctx.err,
                 }});
@@ -310,7 +337,7 @@ fn runSshListener(
     tasks.async(io, Listener.run, .{Listener{
         .io = io,
         .allocator = allocator,
-        .repo_root = repo_root,
+        .repo_root_path = repo_root_path,
         .net_server = net_server,
         .tasks = tasks,
         .err = err,
@@ -322,7 +349,7 @@ fn handleSshGitConnection(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root: []const u8,
+    repo_root_path: []const u8,
     stream: std.Io.net.Stream,
 ) !void {
     var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
@@ -333,10 +360,10 @@ fn handleSshGitConnection(
     const request = try readSshRequest(allocator, &reader.interface);
     defer request.deinit(allocator);
 
-    const repo_path = try resolveSshRepoPath(allocator, repo_root, request.repo);
+    const repo_path = try resolveSshRepoPath(allocator, repo_root_path, request.repo);
     defer allocator.free(repo_path);
 
-    if (!isSubPath(repo_root, repo_path)) return error.Forbidden;
+    if (!isSubPath(repo_root_path, repo_path)) return error.Forbidden;
 
     try openRepoAndServe(repo_kind, any_repo_opts, io, allocator, repo_path, request.service == .receive_pack, SshGitService{
         .reader = &reader.interface,
@@ -503,13 +530,13 @@ fn stripPrefix(value: []const u8, prefix: []const u8) ?[]const u8 {
 
 fn resolveSshRepoPath(
     allocator: std.mem.Allocator,
-    repo_root: []const u8,
+    repo_root_path: []const u8,
     repo: []const u8,
 ) ![]const u8 {
     if (std.fs.path.isAbsolute(repo)) {
         return try std.fs.path.resolve(allocator, &.{repo});
     }
-    return try std.fs.path.resolve(allocator, &.{ repo_root, repo });
+    return try std.fs.path.resolve(allocator, &.{ repo_root_path, repo });
 }
 
 fn parseListenAddress(value: []const u8) !ListenAddress {
