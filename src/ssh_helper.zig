@@ -44,7 +44,7 @@ pub fn run(
     try stream_writer.interface.writeAll(command.dir);
     try stream_writer.interface.flush();
 
-    if (builtin.os.tag != .linux) {
+    if (builtin.os.tag == .windows) {
         var stdin_buffer = [_]u8{0} ** 1024;
         var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buffer);
 
@@ -232,17 +232,12 @@ fn copyFd(src: std.posix.fd_t, dst: std.posix.fd_t) !void {
 fn writeAllFd(fd: std.posix.fd_t, bytes: []const u8) !void {
     var written: usize = 0;
     while (written < bytes.len) {
-        while (true) {
-            const rc = std.os.linux.write(fd, bytes[written..].ptr, bytes.len - written);
-            switch (std.os.linux.errno(rc)) {
-                .SUCCESS => {
-                    written += @intCast(rc);
-                    break;
-                },
-                .INTR => continue,
-                .PIPE => return error.BrokenPipe,
-                else => return error.WriteFailed,
-            }
+        const rc = std.posix.system.write(fd, bytes[written..].ptr, bytes.len - written);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => written += @intCast(rc),
+            .INTR => continue,
+            .PIPE => return error.BrokenPipe,
+            else => return error.WriteFailed,
         }
     }
 }
