@@ -188,96 +188,92 @@ pub const CommandArgs = struct {
 
 /// parses the args into a format that can be directly used by a repo.
 /// if any additional allocation needs to be done, the arena inside the cmd args will be used.
-pub fn Command(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKind) type {
-    return union(CommandKind) {
-        serve: struct {
-            http_listen: []const u8,
-            ssh_listen: ?[]const u8,
-            data_dir: []const u8,
-        },
-        ssh_helper: struct {
-            ssh_connect: []const u8,
-            service: ?[]const u8,
-            dir: ?[]const u8,
-        },
+pub const Command = union(CommandKind) {
+    serve: struct {
+        http_listen: []const u8,
+        ssh_listen: ?[]const u8,
+        data_dir: []const u8,
+    },
+    ssh_helper: struct {
+        ssh_connect: []const u8,
+        service: ?[]const u8,
+        dir: ?[]const u8,
+    },
 
-        pub fn initMaybe(cmd_args: *CommandArgs) !?Command(repo_kind, hash_kind) {
-            const command_kind = cmd_args.command_kind orelse return null;
-            switch (command_kind) {
-                .serve => {
-                    if (cmd_args.positional_args.len != 0) return null;
+    pub fn initMaybe(cmd_args: *CommandArgs) !?Command {
+        const command_kind = cmd_args.command_kind orelse return null;
+        switch (command_kind) {
+            .serve => {
+                if (cmd_args.positional_args.len != 0) return null;
 
-                    return .{ .serve = .{
-                        .http_listen = (cmd_args.get("--http-listen") orelse null) orelse "127.0.0.1:8080",
-                        .ssh_listen = (cmd_args.get("--ssh-listen") orelse null),
-                        .data_dir = (cmd_args.get("--data-dir") orelse null) orelse ".",
-                    } };
-                },
-                .ssh_helper => {
-                    if (cmd_args.positional_args.len > 1) return null;
+                return .{ .serve = .{
+                    .http_listen = (cmd_args.get("--http-listen") orelse null) orelse "127.0.0.1:8080",
+                    .ssh_listen = (cmd_args.get("--ssh-listen") orelse null),
+                    .data_dir = (cmd_args.get("--data-dir") orelse null) orelse ".",
+                } };
+            },
+            .ssh_helper => {
+                if (cmd_args.positional_args.len > 1) return null;
 
-                    return .{ .ssh_helper = .{
-                        .ssh_connect = (cmd_args.get("--ssh-connect") orelse null) orelse "127.0.0.1:8081",
-                        .service = (cmd_args.get("--service") orelse null),
-                        .dir = if (cmd_args.positional_args.len == 1) cmd_args.positional_args[0] else null,
-                    } };
-                },
-            }
+                return .{ .ssh_helper = .{
+                    .ssh_connect = (cmd_args.get("--ssh-connect") orelse null) orelse "127.0.0.1:8081",
+                    .service = (cmd_args.get("--service") orelse null),
+                    .dir = if (cmd_args.positional_args.len == 1) cmd_args.positional_args[0] else null,
+                } };
+            },
         }
-    };
-}
+    }
+};
 
 /// parses the given args into a command if valid, and determines how it should be run
 /// (via the TUI or CLI).
-pub fn CommandDispatch(comptime repo_kind: rp.RepoKind, comptime hash_kind: hash.HashKind) type {
-    return union(enum) {
-        invalid: union(enum) {
-            command: []const u8,
-            argument: struct {
-                command: ?CommandKind,
-                value: []const u8,
-            },
+pub const CommandDispatch = union(enum) {
+    invalid: union(enum) {
+        command: []const u8,
+        argument: struct {
+            command: ?CommandKind,
+            value: []const u8,
         },
-        help: ?CommandKind,
-        cli: Command(repo_kind, hash_kind),
+    },
+    help: ?CommandKind,
+    cli: Command,
 
-        pub fn init(cmd_args: *CommandArgs) !CommandDispatch(repo_kind, hash_kind) {
-            const dispatch = try initIgnoreUnused(cmd_args);
-            if (cmd_args.unused_args.count() > 0) {
-                return .{
-                    .invalid = .{
-                        .argument = .{
-                            .command = switch (dispatch) {
-                                .invalid => return dispatch, // if there was already an error, return it instead
-                                .help => |cmd_kind_maybe| cmd_kind_maybe,
-                                .cli => |command| command,
-                            },
-                            .value = cmd_args.unused_args.keys()[0],
+    pub fn init(cmd_args: *CommandArgs) !CommandDispatch {
+        const dispatch = try initIgnoreUnused(cmd_args);
+        if (cmd_args.unused_args.count() > 0) {
+            return .{
+                .invalid = .{
+                    .argument = .{
+                        .command = switch (dispatch) {
+                            .invalid => return dispatch, // if there was already an error, return it instead
+                            .help => |cmd_kind_maybe| cmd_kind_maybe,
+                            .cli => |command| command,
                         },
+                        .value = cmd_args.unused_args.keys()[0],
                     },
-                };
-            }
-            return dispatch;
+                },
+            };
         }
+        return dispatch;
+    }
 
-        pub fn initIgnoreUnused(cmd_args: *CommandArgs) !CommandDispatch(repo_kind, hash_kind) {
-            const show_help = cmd_args.contains("--help");
+    pub fn initIgnoreUnused(cmd_args: *CommandArgs) !CommandDispatch {
+        const show_help = cmd_args.contains("--help");
 
-            if (cmd_args.command_kind) |command_kind| {
-                if (show_help) {
-                    return .{ .help = command_kind };
-                } else if (try Command(repo_kind, hash_kind).initMaybe(cmd_args)) |cmd| {
-                    return .{ .cli = cmd };
-                } else {
-                    return .{ .help = command_kind };
-                }
-            } else if (cmd_args.command_name) |command_name| {
-                return .{ .invalid = .{ .command = command_name } };
-            } else if (show_help) {
-                return .{ .help = null };
+        if (cmd_args.command_kind) |command_kind| {
+            if (show_help) {
+                return .{ .help = command_kind };
+            } else if (try Command.initMaybe(cmd_args)) |cmd| {
+                return .{ .cli = cmd };
             } else {
-                return .{ .help = null };
+                return .{ .help = command_kind };
             }
+        } else if (cmd_args.command_name) |command_name| {
+            return .{ .invalid = .{ .command = command_name } };
+        } else if (show_help) {
+            return .{ .help = null };
+        } else {
+            return .{ .help = null };
         }
-    };
-}
+    }
+};

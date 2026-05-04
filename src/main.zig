@@ -60,7 +60,7 @@ pub fn run(
     var cmd_args = try cmd.CommandArgs.init(allocator, args);
     defer cmd_args.deinit();
 
-    switch (try cmd.CommandDispatch(repo_kind, any_repo_opts.toRepoOpts().hash).init(&cmd_args)) {
+    switch (try cmd.CommandDispatch.init(&cmd_args)) {
         .invalid => |invalid| switch (invalid) {
             .command => |command| {
                 try run_opts.err.print("\"{s}\" is not a valid command\n\n", .{command});
