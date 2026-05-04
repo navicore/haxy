@@ -116,16 +116,6 @@ fn parseConnectAddress(value: []const u8) !ConnectAddress {
     return .{ .host = value[0..colon], .port = port };
 }
 
-fn copy(reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
-    var buffer: [4096]u8 = undefined;
-    while (true) {
-        const len = try reader.readSliceShort(&buffer);
-        if (len == 0) break;
-        try writer.writeAll(buffer[0..len]);
-        try writer.flush();
-    }
-}
-
 fn copyFd(src: std.posix.fd_t, dst: std.posix.fd_t) !void {
     var buffer: [4096]u8 = undefined;
     while (true) {
