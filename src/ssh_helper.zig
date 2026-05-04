@@ -84,82 +84,16 @@ fn resolveCommand(
     }
 
     const original_command = environ_map.get("SSH_ORIGINAL_COMMAND") orelse return error.InvalidSshCommand;
-    var tokens = try parseShellWords(allocator, original_command);
-    defer {
-        for (tokens.items) |token| allocator.free(token);
-        tokens.deinit(allocator);
-    }
-    if (tokens.items.len < 2) return error.InvalidSshCommand;
+    var tokens = try std.process.Args.IteratorGeneral(.{ .single_quotes = true }).init(allocator, original_command);
+    defer tokens.deinit();
+
+    const service_name = tokens.next() orelse return error.InvalidSshCommand;
+    const dir = tokens.next() orelse return error.InvalidSshCommand;
 
     return .{
-        .service = try parseService(tokens.items[0]),
-        .dir = try allocator.dupe(u8, tokens.items[1]),
+        .service = try parseService(service_name),
+        .dir = try allocator.dupe(u8, dir),
     };
-}
-
-fn parseShellWords(allocator: std.mem.Allocator, command: []const u8) !std.ArrayList([]const u8) {
-    var tokens: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (tokens.items) |token| allocator.free(token);
-        tokens.deinit(allocator);
-    }
-
-    var current: std.ArrayList(u8) = .empty;
-    defer current.deinit(allocator);
-
-    var quote: ?u8 = null;
-    var escaping = false;
-    var in_token = false;
-
-    for (command) |c| {
-        if (escaping) {
-            try current.append(allocator, c);
-            escaping = false;
-            in_token = true;
-            continue;
-        }
-
-        if (c == '\\' and quote != '\'') {
-            escaping = true;
-            in_token = true;
-            continue;
-        }
-
-        if (quote) |q| {
-            if (c == q) {
-                quote = null;
-            } else {
-                try current.append(allocator, c);
-            }
-            in_token = true;
-            continue;
-        }
-
-        if (c == '\'' or c == '"') {
-            quote = c;
-            in_token = true;
-            continue;
-        }
-
-        if (std.ascii.isWhitespace(c)) {
-            if (in_token) {
-                try tokens.append(allocator, try current.toOwnedSlice(allocator));
-                current.clearRetainingCapacity();
-                in_token = false;
-            }
-            continue;
-        }
-
-        try current.append(allocator, c);
-        in_token = true;
-    }
-
-    if (escaping or quote != null) return error.InvalidSshCommand;
-    if (in_token) {
-        try tokens.append(allocator, try current.toOwnedSlice(allocator));
-    }
-
-    return tokens;
 }
 
 fn parseService(value: []const u8) !Service {
