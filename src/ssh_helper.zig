@@ -24,6 +24,10 @@ pub fn run(
     options: Options,
     environ_map: *std.process.Environ.Map,
 ) !void {
+    if (builtin.os.tag == .windows) {
+        return error.WindowsNotSupported;
+    }
+
     const command = try resolveCommand(allocator, options, environ_map);
     defer command.deinit(allocator);
 
@@ -33,9 +37,7 @@ pub fn run(
     defer stream.close(io);
 
     var send_buffer = [_]u8{0} ** 1024;
-    var recv_buffer = [_]u8{0} ** 1024;
     var stream_writer = stream.writer(io, &send_buffer);
-    var stream_reader = stream.reader(io, &recv_buffer);
 
     try stream_writer.interface.print(
         "haxy-ssh-helper-v1\nservice={s}\nprotocol={s}\nrepo-length={d}\n\n",
@@ -44,49 +46,19 @@ pub fn run(
     try stream_writer.interface.writeAll(command.dir);
     try stream_writer.interface.flush();
 
-    if (builtin.os.tag == .windows) {
-        var stdin_buffer = [_]u8{0} ** 1024;
-        var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buffer);
+    const CopyIn = struct {
+        io: std.Io,
+        stream: std.Io.net.Stream,
 
-        const CopyIn = struct {
-            io: std.Io,
-            stream: std.Io.net.Stream,
-            reader: *std.Io.Reader,
-            writer: *std.Io.Writer,
+        fn run(ctx: @This()) void {
+            copyFd(std.posix.STDIN_FILENO, ctx.stream.socket.handle) catch {};
+            ctx.stream.shutdown(ctx.io, .send) catch {};
+        }
+    };
+    const stdin_thread = try std.Thread.spawn(.{}, CopyIn.run, .{CopyIn{ .io = io, .stream = stream }});
+    stdin_thread.detach();
 
-            fn run(ctx: @This()) void {
-                copy(ctx.reader, ctx.writer) catch {};
-                ctx.writer.flush() catch {};
-                ctx.stream.shutdown(ctx.io, .send) catch {};
-            }
-        };
-        const stdin_thread = try std.Thread.spawn(.{}, CopyIn.run, .{CopyIn{
-            .io = io,
-            .stream = stream,
-            .reader = &stdin_reader.interface,
-            .writer = &stream_writer.interface,
-        }});
-        stdin_thread.detach();
-
-        var stdout_buffer = [_]u8{0} ** 1024;
-        var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
-        try copy(&stream_reader.interface, &stdout_writer.interface);
-        try stdout_writer.interface.flush();
-    } else {
-        const CopyIn = struct {
-            io: std.Io,
-            stream: std.Io.net.Stream,
-
-            fn run(ctx: @This()) void {
-                copyFd(std.posix.STDIN_FILENO, ctx.stream.socket.handle) catch {};
-                ctx.stream.shutdown(ctx.io, .send) catch {};
-            }
-        };
-        const stdin_thread = try std.Thread.spawn(.{}, CopyIn.run, .{CopyIn{ .io = io, .stream = stream }});
-        stdin_thread.detach();
-
-        try copyFd(stream.socket.handle, std.posix.STDOUT_FILENO);
-    }
+    try copyFd(stream.socket.handle, std.posix.STDOUT_FILENO);
 }
 
 const Command = struct {
