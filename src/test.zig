@@ -1,3 +1,3 @@
 comptime {
-    _ = @import("test/net.zig");
+    _ = @import("test/event.zig");
 }

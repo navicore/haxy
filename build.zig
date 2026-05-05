@@ -48,4 +48,21 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&install_main_exe.step);
         test_step.dependOn(&run_unit_tests.step);
     }
+
+    {
+        const unit_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/testnet.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        unit_tests.root_module.addImport("xit", b.dependency("xit", .{}).module("xit"));
+
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        run_unit_tests.has_side_effects = true;
+        const test_step = b.step("testnet", "Run network unit tests");
+        test_step.dependOn(&install_main_exe.step);
+        test_step.dependOn(&run_unit_tests.step);
+    }
 }
