@@ -31,21 +31,6 @@ pub fn run(
     const data_dir = try std.Io.Dir.cwd().createDirPathOpen(io, data_dir_path, .{});
     defer data_dir.close(io);
 
-    // create a db file just as a test for now
-    {
-        const db_file = try data_dir.createFile(io, "db", .{ .truncate = true, .lock = .exclusive, .read = true });
-        defer db_file.close(io);
-
-        var buffer = std.Io.Writer.Allocating.init(allocator);
-        defer buffer.deinit();
-
-        const DB = xit.xitdb.Database(.buffered_file, u160);
-        var db = try DB.init(.{ .io = io, .file = db_file, .buffer = &buffer });
-
-        const db_array = try DB.ArrayList(.read_write).init(db.rootCursor());
-        try db_array.append(.{ .bytes = "this is a test" });
-    }
-
     // create the repos dir
 
     const repo_root_path = try std.fs.path.resolve(allocator, &.{ data_dir_path, "repos" });
