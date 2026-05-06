@@ -6,10 +6,17 @@ const hash = xit.hash;
 
 const event_id_size: usize = 32;
 
-const AnyEvent = struct {
+const EventData = union(enum) {
+    add_issue: struct {
+        title: []const u8,
+        description: []const u8,
+        tags: []const []const u8,
+    },
+};
+
+const Event = struct {
     id: [event_id_size * 2]u8,
-    kind: []const u8,
-    data: std.json.Value,
+    data: EventData,
 };
 
 test "simple" {
@@ -43,51 +50,41 @@ test "simple" {
     // define test events
     //
 
-    const AddIssueData = struct {
-        title: []const u8,
-        description: []const u8,
-        tags: []const []const u8,
-
-        fn toJsonValue(issue: @This(), value_allocator: std.mem.Allocator) !std.json.Value {
-            var tags = std.json.Array.init(value_allocator);
-            for (issue.tags) |tag| {
-                try tags.append(.{ .string = tag });
-            }
-
-            var object: std.json.ObjectMap = .empty;
-            try object.put(value_allocator, "title", .{ .string = issue.title });
-            try object.put(value_allocator, "description", .{ .string = issue.description });
-            try object.put(value_allocator, "tags", .{ .array = tags });
-
-            return .{ .object = object };
-        }
-    };
-
-    const issues_data = [_]AddIssueData{
+    const events_to_process = [_]EventData{
         .{
-            .title = "Login form clears password on validation error",
-            .description = "Submitting an invalid email address resets the password field. Preserve the field value and show an inline validation message.",
-            .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+            .add_issue = .{
+                .title = "Login form clears password on validation error",
+                .description = "Submitting an invalid email address resets the password field. Preserve the field value and show an inline validation message.",
+                .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+            },
         },
         .{
-            .title = "Search results ignore archived project filter",
-            .description = "Filtering search results to active projects still returns issues from archived projects. Apply the archived flag before ranking results.",
-            .tags = &[_][]const u8{ "bug", "search", "backend" },
+            .add_issue = .{
+                .title = "Search results ignore archived project filter",
+                .description = "Filtering search results to active projects still returns issues from archived projects. Apply the archived flag before ranking results.",
+                .tags = &[_][]const u8{ "bug", "search", "backend" },
+            },
         },
         .{
-            .title = "Issue list does not persist selected sort order",
-            .description = "Changing the issue list sort order is lost after refresh. Store the selected sort field and direction with the user's view preferences.",
-            .tags = &[_][]const u8{ "enhancement", "frontend", "preferences" },
+            .add_issue = .{
+                .title = "Issue list does not persist selected sort order",
+                .description = "Changing the issue list sort order is lost after refresh. Store the selected sort field and direction with the user's view preferences.",
+                .tags = &[_][]const u8{ "enhancement", "frontend", "preferences" },
+            },
         },
         .{
-            .title = "Webhook retries stop after transient timeout",
-            .description = "A single gateway timeout marks webhook delivery as failed permanently. Retry transient network errors with exponential backoff.",
-            .tags = &[_][]const u8{ "bug", "webhooks", "reliability" },
+            .add_issue = .{
+                .title = "Webhook retries stop after transient timeout",
+                .description = "A single gateway timeout marks webhook delivery as failed permanently. Retry transient network errors with exponential backoff.",
+                .tags = &[_][]const u8{ "bug", "webhooks", "reliability" },
+            },
         },
         .{
-            .title = "CSV export omits labels with commas",
-            .description = "Exported issue rows drop labels that contain commas instead of escaping them. Quote CSV fields according to RFC 4180.",
-            .tags = &[_][]const u8{ "bug", "export", "data-integrity" },
+            .add_issue = .{
+                .title = "CSV export omits labels with commas",
+                .description = "Exported issue rows drop labels that contain commas instead of escaping them. Quote CSV fields according to RFC 4180.",
+                .tags = &[_][]const u8{ "bug", "export", "data-integrity" },
+            },
         },
     };
 
@@ -102,16 +99,15 @@ test "simple" {
     var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer json.deinit();
 
-    for (issues_data) |issue_data| {
+    for (events_to_process) |event_data| {
         json.clearRetainingCapacity();
 
         var id_bytes: [event_id_size]u8 = undefined;
         prng.random().bytes(&id_bytes);
 
-        const event = AnyEvent{
+        const event = Event{
             .id = std.fmt.bytesToHex(id_bytes, .lower),
-            .kind = "add-issue",
-            .data = try issue_data.toJsonValue(arena.allocator()),
+            .data = event_data,
         };
 
         try std.json.Stringify.value(event, .{}, &json.writer);
@@ -124,7 +120,7 @@ test "simple" {
     // read and parse all of the events from the repo
     //
 
-    var events: std.ArrayList(AnyEvent) = .empty;
+    var events: std.ArrayList(Event) = .empty;
     defer events.deinit(allocator);
 
     var event_strs: std.ArrayList([]const u8) = .empty;
@@ -148,7 +144,7 @@ test "simple" {
     // add events in reverse order so the earliest event is first.
     for (0..event_strs.items.len) |i| {
         const event_str = event_strs.items[event_strs.items.len - i - 1];
-        const event = try std.json.parseFromSliceLeaky(AnyEvent, arena.allocator(), event_str, .{});
+        const event = try std.json.parseFromSliceLeaky(Event, arena.allocator(), event_str, .{});
         try events.append(allocator, event);
     }
 
@@ -157,7 +153,7 @@ test "simple" {
     //
 
     const Ctx = struct {
-        events: []AnyEvent,
+        events: []Event,
 
         pub fn run(ctx: @This(), cursor: *Repo.DB.Cursor(.read_write)) !void {
             const moment = try Repo.DB.HashMap(.read_write).init(cursor.*);
@@ -208,23 +204,18 @@ test "simple" {
                 {
                     const views = try Repo.DB.HashMap(.read_write).init(views_cursor);
 
-                    if (std.mem.eql(u8, "add-issue", event.kind)) {
-                        const data = switch (event.data) {
-                            .object => |object| object,
-                            else => return error.InvalidEventData,
-                        };
+                    switch (event.data) {
+                        .add_issue => |data| {
+                            const issues_cursor = try views.putCursor(hash.hashInt(repo_opts.hash, "issues"));
+                            const issues = try Repo.DB.ArrayList(.read_write).init(issues_cursor);
 
-                        const issues_cursor = try views.putCursor(hash.hashInt(repo_opts.hash, "issues"));
-                        const issues = try Repo.DB.ArrayList(.read_write).init(issues_cursor);
+                            const issue_cursor = try issues.appendCursor();
+                            const issue = try Repo.DB.HashMap(.read_write).init(issue_cursor);
 
-                        const issue_cursor = try issues.appendCursor();
-                        const issue = try Repo.DB.HashMap(.read_write).init(issue_cursor);
-
-                        try issue.put(hash.hashInt(repo_opts.hash, "id"), .{ .bytes = &event.id });
-                        try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = try getObjectString(data, "title") });
-                        try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = try getObjectString(data, "description") });
-                    } else {
-                        return error.InvalidEventKind;
+                            try issue.put(hash.hashInt(repo_opts.hash, "id"), .{ .bytes = &event.id });
+                            try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = data.title });
+                            try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = data.description });
+                        },
                     }
                 }
 
@@ -238,14 +229,6 @@ test "simple" {
             if (last_event_id_maybe) |*last_event_id| {
                 try haxy.put(hash.hashInt(repo_opts.hash, "last-event-id"), .{ .bytes = last_event_id });
             }
-        }
-
-        fn getObjectString(object: std.json.ObjectMap, key: []const u8) ![]const u8 {
-            const value = object.get(key) orelse return error.MissingEventField;
-            return switch (value) {
-                .string => |string| string,
-                else => error.InvalidEventField,
-            };
         }
     };
 
@@ -273,5 +256,5 @@ test "simple" {
         _ = try kv_pair_cursor.readKeyValuePair();
         count += 1;
     }
-    try std.testing.expectEqual(issues_data.len, count);
+    try std.testing.expectEqual(events_to_process.len, count);
 }
