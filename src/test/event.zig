@@ -4,6 +4,14 @@ const xit = @import("xit");
 const rp = xit.repo;
 const hash = xit.hash;
 
+const event_id_size: usize = 32;
+
+const AnyEvent = struct {
+    id: [event_id_size * 2]u8,
+    kind: []const u8,
+    data: std.json.Value,
+};
+
 test "simple" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
@@ -39,13 +47,20 @@ test "simple" {
         title: []const u8,
         description: []const u8,
         tags: []const []const u8,
-    };
 
-    const id_size: usize = 32;
-    const AddIssueEvent = struct {
-        id: [id_size * 2]u8,
-        kind: []const u8,
-        data: AddIssueData,
+        fn toJsonValue(issue: @This(), value_allocator: std.mem.Allocator) !std.json.Value {
+            var tags = std.json.Array.init(value_allocator);
+            for (issue.tags) |tag| {
+                try tags.append(.{ .string = tag });
+            }
+
+            var object: std.json.ObjectMap = .empty;
+            try object.put(value_allocator, "title", .{ .string = issue.title });
+            try object.put(value_allocator, "description", .{ .string = issue.description });
+            try object.put(value_allocator, "tags", .{ .array = tags });
+
+            return .{ .object = object };
+        }
     };
 
     const issues_data = [_]AddIssueData{
@@ -80,6 +95,9 @@ test "simple" {
     // insert issues as commits in the repo
     //
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer json.deinit();
@@ -87,13 +105,13 @@ test "simple" {
     for (issues_data) |issue_data| {
         json.clearRetainingCapacity();
 
-        var id_bytes: [id_size]u8 = undefined;
+        var id_bytes: [event_id_size]u8 = undefined;
         prng.random().bytes(&id_bytes);
 
-        const event = AddIssueEvent{
+        const event = AnyEvent{
             .id = std.fmt.bytesToHex(id_bytes, .lower),
             .kind = "add-issue",
-            .data = issue_data,
+            .data = try issue_data.toJsonValue(arena.allocator()),
         };
 
         try std.json.Stringify.value(event, .{}, &json.writer);
@@ -106,14 +124,11 @@ test "simple" {
     // read and parse all of the events from the repo
     //
 
-    var events: std.ArrayList(AddIssueEvent) = .empty;
+    var events: std.ArrayList(AnyEvent) = .empty;
     defer events.deinit(allocator);
 
     var event_strs: std.ArrayList([]const u8) = .empty;
     defer event_strs.deinit(allocator);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
 
     const ref_haxy_meta = try repo.readRef(io, .{ .kind = .head, .name = "haxy/meta" }) orelse return error.RefNotFound;
     var commit_iter = try repo.log(io, allocator, &.{ref_haxy_meta});
@@ -129,11 +144,11 @@ test "simple" {
         try event_strs.append(allocator, message);
     }
 
-    // parse commit messages as JSON into struct instances.
+    // parse commit messages as JSON into event values.
     // add events in reverse order so the earliest event is first.
     for (0..event_strs.items.len) |i| {
         const event_str = event_strs.items[event_strs.items.len - i - 1];
-        const event = try std.json.parseFromSliceLeaky(AddIssueEvent, arena.allocator(), event_str, .{});
+        const event = try std.json.parseFromSliceLeaky(AnyEvent, arena.allocator(), event_str, .{});
         try events.append(allocator, event);
     }
 
@@ -142,7 +157,7 @@ test "simple" {
     //
 
     const Ctx = struct {
-        events: []AddIssueEvent,
+        events: []AnyEvent,
 
         pub fn run(ctx: @This(), cursor: *Repo.DB.Cursor(.read_write)) !void {
             const moment = try Repo.DB.HashMap(.read_write).init(cursor.*);
@@ -152,9 +167,9 @@ test "simple" {
             const haxy = try Repo.DB.HashMap(.read_write).init(haxy_cursor);
 
             // try reading the last event id that was processed in the db
-            var last_event_id_maybe: ?[id_size]u8 = null;
+            var last_event_id_maybe: ?[event_id_size]u8 = null;
             if (try haxy.getCursor(hash.hashInt(repo_opts.hash, "last-event-id"))) |last_event_id_cursor| {
-                var last_event_id_buffer: [id_size]u8 = undefined;
+                var last_event_id_buffer: [event_id_size]u8 = undefined;
                 _ = try last_event_id_cursor.readBytes(&last_event_id_buffer);
                 last_event_id_maybe = last_event_id_buffer;
             }
@@ -162,7 +177,7 @@ test "simple" {
             // for each event we want to process...
             for (ctx.events) |event| {
                 // get the id of the current event as bytes
-                var current_event_id_buffer: [id_size]u8 = undefined;
+                var current_event_id_buffer: [event_id_size]u8 = undefined;
                 _ = try std.fmt.hexToBytes(&current_event_id_buffer, &event.id);
 
                 // if this event has already been processed, skip it
@@ -194,6 +209,11 @@ test "simple" {
                     const views = try Repo.DB.HashMap(.read_write).init(views_cursor);
 
                     if (std.mem.eql(u8, "add-issue", event.kind)) {
+                        const data = switch (event.data) {
+                            .object => |object| object,
+                            else => return error.InvalidEventData,
+                        };
+
                         const issues_cursor = try views.putCursor(hash.hashInt(repo_opts.hash, "issues"));
                         const issues = try Repo.DB.ArrayList(.read_write).init(issues_cursor);
 
@@ -201,8 +221,8 @@ test "simple" {
                         const issue = try Repo.DB.HashMap(.read_write).init(issue_cursor);
 
                         try issue.put(hash.hashInt(repo_opts.hash, "id"), .{ .bytes = &event.id });
-                        try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = event.data.title });
-                        try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = event.data.description });
+                        try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = try getObjectString(data, "title") });
+                        try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = try getObjectString(data, "description") });
                     } else {
                         return error.InvalidEventKind;
                     }
@@ -218,6 +238,14 @@ test "simple" {
             if (last_event_id_maybe) |*last_event_id| {
                 try haxy.put(hash.hashInt(repo_opts.hash, "last-event-id"), .{ .bytes = last_event_id });
             }
+        }
+
+        fn getObjectString(object: std.json.ObjectMap, key: []const u8) ![]const u8 {
+            const value = object.get(key) orelse return error.MissingEventField;
+            return switch (value) {
+                .string => |string| string,
+                else => error.InvalidEventField,
+            };
         }
     };
 
