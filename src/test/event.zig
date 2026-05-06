@@ -31,7 +31,9 @@ test "simple" {
     var repo = try Repo.init(io, allocator, .{ .path = work_path });
     defer repo.deinit(io, allocator);
 
+    //
     // define test events
+    //
 
     const AddIssueData = struct {
         title: []const u8,
@@ -39,9 +41,9 @@ test "simple" {
         tags: []const []const u8,
     };
 
-    const id_size: usize = 20;
+    const id_size: usize = 32;
     const AddIssueEvent = struct {
-        id: [2 * id_size]u8,
+        id: [id_size * 2]u8,
         kind: []const u8,
         data: AddIssueData,
     };
@@ -74,7 +76,9 @@ test "simple" {
         },
     };
 
+    //
     // insert issues as commits in the repo
+    //
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -83,20 +87,24 @@ test "simple" {
     for (issues_data) |issue_data| {
         json.clearRetainingCapacity();
 
-        var entropy: [id_size]u8 = undefined;
-        prng.random().bytes(&entropy);
+        var id_bytes: [id_size]u8 = undefined;
+        prng.random().bytes(&id_bytes);
 
         const event = AddIssueEvent{
-            .id = std.fmt.bytesToHex(entropy, .lower),
+            .id = std.fmt.bytesToHex(id_bytes, .lower),
             .kind = "add-issue",
             .data = issue_data,
         };
 
         try std.json.Stringify.value(event, .{}, &json.writer);
+
+        // commit the event into a special branch
         _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
     }
 
+    //
     // read and parse all of the events from the repo
+    //
 
     var events: std.ArrayList(AddIssueEvent) = .empty;
     defer events.deinit(allocator);
@@ -111,6 +119,7 @@ test "simple" {
     var commit_iter = try repo.log(io, allocator, &.{ref_haxy_meta});
     defer commit_iter.deinit();
 
+    // read the message from each commit
     while (try commit_iter.next()) |commit_object| {
         defer commit_object.deinit();
 
@@ -120,43 +129,121 @@ test "simple" {
         try event_strs.append(allocator, message);
     }
 
+    // parse commit messages as JSON into struct instances.
+    // add events in reverse order so the earliest event is first.
     for (0..event_strs.items.len) |i| {
         const event_str = event_strs.items[event_strs.items.len - i - 1];
         const event = try std.json.parseFromSliceLeaky(AddIssueEvent, arena.allocator(), event_str, .{});
         try events.append(allocator, event);
     }
 
+    //
     // process events into the database
+    //
 
-    for (events.items) |event| {
-        const Ctx = struct {
-            event: AddIssueEvent,
+    const Ctx = struct {
+        events: []AddIssueEvent,
 
-            pub fn run(ctx: @This(), cursor: *Repo.DB.Cursor(.read_write)) !void {
-                const moment = try Repo.DB.HashMap(.read_write).init(cursor.*);
+        pub fn run(ctx: @This(), cursor: *Repo.DB.Cursor(.read_write)) !void {
+            const moment = try Repo.DB.HashMap(.read_write).init(cursor.*);
 
-                const haxy_views_cursor = try moment.putCursor(hash.hashInt(repo_opts.hash, "haxy-views"));
-                const haxy_views = try Repo.DB.HashMap(.read_write).init(haxy_views_cursor);
+            // the map with all of haxy's state and materialized views
+            const haxy_cursor = try moment.putCursor(hash.hashInt(repo_opts.hash, "haxy"));
+            const haxy = try Repo.DB.HashMap(.read_write).init(haxy_cursor);
 
-                const issues_cursor = try haxy_views.putCursor(hash.hashInt(repo_opts.hash, "issues"));
-                const issues = try Repo.DB.ArrayList(.read_write).init(issues_cursor);
-
-                const issue_cursor = try issues.appendCursor();
-                const issue = try Repo.DB.HashMap(.read_write).init(issue_cursor);
-
-                try issue.put(hash.hashInt(repo_opts.hash, "id"), .{ .bytes = &ctx.event.id });
-                try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = ctx.event.data.title });
-                try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = ctx.event.data.description });
+            // try reading the last event id that was processed in the db
+            var last_event_id_maybe: ?[id_size]u8 = null;
+            if (try haxy.getCursor(hash.hashInt(repo_opts.hash, "last-event-id"))) |last_event_id_cursor| {
+                var last_event_id_buffer: [id_size]u8 = undefined;
+                _ = try last_event_id_cursor.readBytes(&last_event_id_buffer);
+                last_event_id_maybe = last_event_id_buffer;
             }
-        };
 
-        try repo.core.db_file.lock(io, .exclusive);
-        defer repo.core.db_file.unlock(io);
+            // for each event we want to process...
+            for (ctx.events) |event| {
+                // get the id of the current event as bytes
+                var current_event_id_buffer: [id_size]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&current_event_id_buffer, &event.id);
 
-        const history = try Repo.DB.ArrayList(.read_write).init(repo.core.db.rootCursor());
-        try history.appendContext(
-            .{ .slot = try history.getSlot(-1) },
-            Ctx{ .event = event },
-        );
+                // if this event has already been processed, skip it
+                if (try haxy.getCursor(hash.hashInt(repo_opts.hash, "event-id->views"))) |event_id_to_views_cursor| {
+                    const event_id_to_views = try Repo.DB.HashMap(.read_only).init(event_id_to_views_cursor);
+                    if (null != try event_id_to_views.getCursor(hash.hashInt(repo_opts.hash, &current_event_id_buffer))) {
+                        continue;
+                    }
+                }
+
+                // map with the views as they appeared when each event was processed.
+                // we can use this to see (and revert) the views to any previous state.
+                const event_id_to_views_cursor = try haxy.putCursor(hash.hashInt(repo_opts.hash, "event-id->views"));
+                const event_id_to_views = try Repo.DB.HashMap(.read_write).init(event_id_to_views_cursor);
+
+                // create a new views map for the current event we are processing
+                var views_cursor = try event_id_to_views.putCursor(hash.hashInt(repo_opts.hash, &current_event_id_buffer));
+
+                // if there was a previous event, set the views map to have the same value as it.
+                // this efficiently "clones" the map so we make further modifications based on it.
+                if (last_event_id_maybe) |*last_event_id| {
+                    if (try event_id_to_views.getCursor(hash.hashInt(repo_opts.hash, last_event_id))) |last_view_cursor| {
+                        try views_cursor.write(.{ .slot = last_view_cursor.slot() });
+                    }
+                }
+
+                // process the event into the views map
+                {
+                    const views = try Repo.DB.HashMap(.read_write).init(views_cursor);
+
+                    if (std.mem.eql(u8, "add-issue", event.kind)) {
+                        const issues_cursor = try views.putCursor(hash.hashInt(repo_opts.hash, "issues"));
+                        const issues = try Repo.DB.ArrayList(.read_write).init(issues_cursor);
+
+                        const issue_cursor = try issues.appendCursor();
+                        const issue = try Repo.DB.HashMap(.read_write).init(issue_cursor);
+
+                        try issue.put(hash.hashInt(repo_opts.hash, "id"), .{ .bytes = &event.id });
+                        try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = event.data.title });
+                        try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = event.data.description });
+                    } else {
+                        return error.InvalidEventKind;
+                    }
+                }
+
+                // the current event id is now the last one
+                last_event_id_maybe = current_event_id_buffer;
+
+                // prevent any of the data created above from being mutated by future iterations of this loop
+                try cursor.db.freeze();
+            }
+
+            if (last_event_id_maybe) |*last_event_id| {
+                try haxy.put(hash.hashInt(repo_opts.hash, "last-event-id"), .{ .bytes = last_event_id });
+            }
+        }
+    };
+
+    try repo.core.db_file.lock(io, .exclusive);
+    defer repo.core.db_file.unlock(io);
+
+    // create a new transaction in the database that runs the above-defined Ctx function
+    const history = try Repo.DB.ArrayList(.read_write).init(repo.core.db.rootCursor());
+    try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .events = events.items });
+
+    // read the moment we just created
+    const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+    const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
+
+    const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+    const haxy = try Repo.DB.HashMap(.read_only).init(haxy_cursor);
+
+    const event_id_to_views_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "event-id->views")) orelse return error.NotFound;
+    const event_id_to_views = try Repo.DB.HashMap(.read_only).init(event_id_to_views_cursor);
+
+    // make sure all events have been processed
+    var count: usize = 0;
+    var event_id_to_views_iter = try event_id_to_views.iterator();
+    while (try event_id_to_views_iter.next()) |kv_pair_cursor| {
+        _ = try kv_pair_cursor.readKeyValuePair();
+        count += 1;
     }
+    try std.testing.expectEqual(issues_data.len, count);
 }
