@@ -4,6 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // main
     const install_main_exe = blk: {
         const exe = b.addExecutable(.{
             .name = "haxy",
@@ -32,6 +33,14 @@ pub fn build(b: *std.Build) void {
         break :blk install_exe;
     };
 
+    // module for using haxy as a library
+    // (the commands below consume haxy this way)
+    const haxy = b.addModule("haxy", .{
+        .root_source_file = b.path("src/lib.zig"),
+    });
+    haxy.addImport("xit", b.dependency("xit", .{}).module("xit"));
+
+    // test
     {
         const unit_tests = b.addTest(.{
             .root_module = b.createModule(.{
@@ -40,7 +49,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             }),
         });
-        unit_tests.root_module.addImport("xit", b.dependency("xit", .{}).module("xit"));
+        unit_tests.root_module.addImport("haxy", haxy);
 
         const run_unit_tests = b.addRunArtifact(unit_tests);
         run_unit_tests.has_side_effects = true;
@@ -49,6 +58,7 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_unit_tests.step);
     }
 
+    // testnet
     {
         const unit_tests = b.addTest(.{
             .root_module = b.createModule(.{
@@ -57,7 +67,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             }),
         });
-        unit_tests.root_module.addImport("xit", b.dependency("xit", .{}).module("xit"));
+        unit_tests.root_module.addImport("haxy", haxy);
 
         const run_unit_tests = b.addRunArtifact(unit_tests);
         run_unit_tests.has_side_effects = true;
