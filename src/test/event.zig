@@ -7,7 +7,7 @@ const hash = xit.hash;
 const event_id_size: usize = 32;
 
 const EventData = union(enum) {
-    add_issue: struct {
+    issue: struct {
         title: []const u8,
         description: []const u8,
         tags: []const []const u8,
@@ -18,6 +18,12 @@ const Event = struct {
     id: [event_id_size * 2]u8,
     data: EventData,
 };
+
+fn randomId(random: std.Random) [event_id_size]u8 {
+    var id_bytes: [event_id_size]u8 = undefined;
+    random.bytes(&id_bytes);
+    return id_bytes;
+}
 
 test "simple" {
     const io = std.testing.io;
@@ -50,40 +56,50 @@ test "simple" {
     // define test events
     //
 
-    const events_to_process = [_]EventData{
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const first_event_id = randomId(prng.random());
+
+    const events_to_process = [_]Event{
         .{
-            .add_issue = .{
-                .title = "Login form clears password on validation error",
-                .description = "Submitting an invalid email address resets the password field. Preserve the field value and show an inline validation message.",
-                .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+            .id = std.fmt.bytesToHex(first_event_id, .lower),
+            .data = .{
+                .issue = .{
+                    .title = "Login form clears password on validation error",
+                    .description = "Submitting an invalid email address resets the password field. Preserve the field value and show an inline validation message.",
+                    .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+                },
+            },
+        },
+        // this event edits the previous one because it has the same id
+        .{
+            .id = std.fmt.bytesToHex(first_event_id, .lower),
+            .data = .{
+                .issue = .{
+                    .title = "Login form clears password on validation error",
+                    .description = "Submitting an invalid email address resets the password field and removes typed input. Preserve the field value and show an inline validation message.",
+                    .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+                },
             },
         },
         .{
-            .add_issue = .{
-                .title = "Search results ignore archived project filter",
-                .description = "Filtering search results to active projects still returns issues from archived projects. Apply the archived flag before ranking results.",
-                .tags = &[_][]const u8{ "bug", "search", "backend" },
+            .id = std.fmt.bytesToHex(randomId(prng.random()), .lower),
+            .data = .{
+                .issue = .{
+                    .title = "Search results ignore archived project filter",
+                    .description = "Filtering search results to active projects still returns issues from archived projects. Apply the archived flag before ranking results.",
+                    .tags = &[_][]const u8{ "bug", "search", "backend" },
+                },
             },
         },
         .{
-            .add_issue = .{
-                .title = "Issue list does not persist selected sort order",
-                .description = "Changing the issue list sort order is lost after refresh. Store the selected sort field and direction with the user's view preferences.",
-                .tags = &[_][]const u8{ "enhancement", "frontend", "preferences" },
-            },
-        },
-        .{
-            .add_issue = .{
-                .title = "Webhook retries stop after transient timeout",
-                .description = "A single gateway timeout marks webhook delivery as failed permanently. Retry transient network errors with exponential backoff.",
-                .tags = &[_][]const u8{ "bug", "webhooks", "reliability" },
-            },
-        },
-        .{
-            .add_issue = .{
-                .title = "CSV export omits labels with commas",
-                .description = "Exported issue rows drop labels that contain commas instead of escaping them. Quote CSV fields according to RFC 4180.",
-                .tags = &[_][]const u8{ "bug", "export", "data-integrity" },
+            .id = std.fmt.bytesToHex(randomId(prng.random()), .lower),
+            .data = .{
+                .issue = .{
+                    .title = "Issue list does not persist selected sort order",
+                    .description = "Changing the issue list sort order is lost after refresh. Store the selected sort field and direction with the user's view preferences.",
+                    .tags = &[_][]const u8{ "enhancement", "frontend", "preferences" },
+                },
             },
         },
     };
@@ -95,25 +111,18 @@ test "simple" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer json.deinit();
+    {
+        var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer json.deinit();
 
-    for (events_to_process) |event_data| {
-        json.clearRetainingCapacity();
+        for (events_to_process) |event| {
+            json.clearRetainingCapacity();
 
-        var id_bytes: [event_id_size]u8 = undefined;
-        prng.random().bytes(&id_bytes);
+            try std.json.Stringify.value(event, .{}, &json.writer);
 
-        const event = Event{
-            .id = std.fmt.bytesToHex(id_bytes, .lower),
-            .data = event_data,
-        };
-
-        try std.json.Stringify.value(event, .{}, &json.writer);
-
-        // commit the event into a special branch
-        _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
+            // commit the event into a special branch
+            _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
+        }
     }
 
     //
@@ -123,29 +132,31 @@ test "simple" {
     var events: std.ArrayList(Event) = .empty;
     defer events.deinit(allocator);
 
-    var event_strs: std.ArrayList([]const u8) = .empty;
-    defer event_strs.deinit(allocator);
+    {
+        var event_strs: std.ArrayList([]const u8) = .empty;
+        defer event_strs.deinit(allocator);
 
-    const ref_haxy_meta = try repo.readRef(io, .{ .kind = .head, .name = "haxy/meta" }) orelse return error.RefNotFound;
-    var commit_iter = try repo.log(io, allocator, &.{ref_haxy_meta});
-    defer commit_iter.deinit();
+        const ref_haxy_meta = try repo.readRef(io, .{ .kind = .head, .name = "haxy/meta" }) orelse return error.RefNotFound;
+        var commit_iter = try repo.log(io, allocator, &.{ref_haxy_meta});
+        defer commit_iter.deinit();
 
-    // read the message from each commit
-    while (try commit_iter.next()) |commit_object| {
-        defer commit_object.deinit();
+        // read the message from each commit
+        while (try commit_iter.next()) |commit_object| {
+            defer commit_object.deinit();
 
-        try commit_object.object_reader.seekTo(commit_object.content.commit.message_position);
-        const message = try commit_object.object_reader.interface.allocRemaining(arena.allocator(), .unlimited);
+            try commit_object.object_reader.seekTo(commit_object.content.commit.message_position);
+            const message = try commit_object.object_reader.interface.allocRemaining(arena.allocator(), .unlimited);
 
-        try event_strs.append(allocator, message);
-    }
+            try event_strs.append(allocator, message);
+        }
 
-    // parse commit messages as JSON into event values.
-    // add events in reverse order so the earliest event is first.
-    for (0..event_strs.items.len) |i| {
-        const event_str = event_strs.items[event_strs.items.len - i - 1];
-        const event = try std.json.parseFromSliceLeaky(Event, arena.allocator(), event_str, .{});
-        try events.append(allocator, event);
+        // parse commit messages as JSON into event values.
+        // add events in reverse order so the earliest event is first.
+        for (0..event_strs.items.len) |i| {
+            const event_str = event_strs.items[event_strs.items.len - i - 1];
+            const event = try std.json.parseFromSliceLeaky(Event, arena.allocator(), event_str, .{});
+            try events.append(allocator, event);
+        }
     }
 
     //
@@ -176,14 +187,6 @@ test "simple" {
                 var current_event_id_buffer: [event_id_size]u8 = undefined;
                 _ = try std.fmt.hexToBytes(&current_event_id_buffer, &event.id);
 
-                // if this event has already been processed, skip it
-                if (try haxy.getCursor(hash.hashInt(repo_opts.hash, "event-id->views"))) |event_id_to_views_cursor| {
-                    const event_id_to_views = try Repo.DB.HashMap(.read_only).init(event_id_to_views_cursor);
-                    if (null != try event_id_to_views.getCursor(hash.hashInt(repo_opts.hash, &current_event_id_buffer))) {
-                        continue;
-                    }
-                }
-
                 // map with the views as they appeared when each event was processed.
                 // we can use this to see (and revert) the views to any previous state.
                 const event_id_to_views_cursor = try haxy.putCursor(hash.hashInt(repo_opts.hash, "event-id->views"));
@@ -205,16 +208,16 @@ test "simple" {
                     const views = try Repo.DB.HashMap(.read_write).init(views_cursor);
 
                     switch (event.data) {
-                        .add_issue => |data| {
-                            const issues_cursor = try views.putCursor(hash.hashInt(repo_opts.hash, "issues"));
-                            const issues = try Repo.DB.ArrayList(.read_write).init(issues_cursor);
+                        .issue => |data| {
+                            const event_id_to_issue_cursor = try views.putCursor(hash.hashInt(repo_opts.hash, "event-id->issue"));
+                            const event_id_to_issue = try Repo.DB.HashMap(.read_write).init(event_id_to_issue_cursor);
 
-                            const issue_cursor = try issues.appendCursor();
+                            const issue_cursor = try event_id_to_issue.putCursor(hash.hashInt(repo_opts.hash, &current_event_id_buffer));
                             const issue = try Repo.DB.HashMap(.read_write).init(issue_cursor);
 
-                            try issue.put(hash.hashInt(repo_opts.hash, "id"), .{ .bytes = &event.id });
-                            try issue.put(hash.hashInt(repo_opts.hash, "title"), .{ .bytes = data.title });
-                            try issue.put(hash.hashInt(repo_opts.hash, "description"), .{ .bytes = data.description });
+                            try putIfDifferent(issue, hash.hashInt(repo_opts.hash, "id"), &current_event_id_buffer);
+                            try putIfDifferent(issue, hash.hashInt(repo_opts.hash, "title"), data.title);
+                            try putIfDifferent(issue, hash.hashInt(repo_opts.hash, "description"), data.description);
                         },
                     }
                 }
@@ -229,6 +232,18 @@ test "simple" {
             if (last_event_id_maybe) |*last_event_id| {
                 try haxy.put(hash.hashInt(repo_opts.hash, "last-event-id"), .{ .bytes = last_event_id });
             }
+        }
+
+        fn putIfDifferent(map: Repo.DB.HashMap(.read_write), key: hash.HashInt(repo_opts.hash), value: []const u8) !void {
+            if (try map.getCursor(key)) |value_cursor| {
+                var buffer: [4096]u8 = undefined;
+                const existing_value = try value_cursor.readBytes(&buffer);
+                if (std.mem.eql(u8, existing_value, value)) {
+                    return;
+                }
+            }
+
+            try map.put(key, .{ .bytes = value });
         }
     };
 
@@ -249,12 +264,29 @@ test "simple" {
     const event_id_to_views_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "event-id->views")) orelse return error.NotFound;
     const event_id_to_views = try Repo.DB.HashMap(.read_only).init(event_id_to_views_cursor);
 
-    // make sure all events have been processed
-    var count: usize = 0;
-    var event_id_to_views_iter = try event_id_to_views.iterator();
-    while (try event_id_to_views_iter.next()) |kv_pair_cursor| {
-        _ = try kv_pair_cursor.readKeyValuePair();
-        count += 1;
+    // make sure the issue from the first event was correctly edited
+    {
+        // get the last event id
+        const last_event_id_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "last-event-id")) orelse return error.NotFound;
+        var last_event_id_buffer: [event_id_size]u8 = undefined;
+        _ = try last_event_id_cursor.readBytes(&last_event_id_buffer);
+
+        // get the latest views (the views generated by the last event id)
+        const views_cursor = try event_id_to_views.getCursor(hash.hashInt(repo_opts.hash, &last_event_id_buffer)) orelse return error.NotFound;
+        const views = try Repo.DB.HashMap(.read_only).init(views_cursor);
+
+        // get the map of issues
+        const event_id_to_issue_cursor = try views.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
+        const event_id_to_issue = try Repo.DB.HashMap(.read_only).init(event_id_to_issue_cursor);
+
+        // get the issue out of the map that was edited
+        const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_event_id)) orelse return error.NotFound;
+        const first_issue = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
+
+        // make sure the issue's description was correctly edited
+        const first_issue_description_cursor = try first_issue.getCursor(hash.hashInt(repo_opts.hash, "description")) orelse return error.NotFound;
+        const first_issue_description_value = try first_issue_description_cursor.readBytesAlloc(allocator, null);
+        defer allocator.free(first_issue_description_value);
+        try std.testing.expectEqualStrings(events_to_process[1].data.issue.description, first_issue_description_value);
     }
-    try std.testing.expectEqual(events_to_process.len, count);
 }
