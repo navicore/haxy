@@ -9,7 +9,7 @@ pub const EventData = union(enum) {
     issue: struct {
         title: []const u8,
         description: []const u8,
-        tags: []const []const u8,
+        tags: []const u8,
     },
 };
 
@@ -152,21 +152,17 @@ fn upsertField(
 
     switch (@typeInfo(Field)) {
         .pointer => |pointer_info| {
-            if (pointer_info.size != .slice) {
-                @compileError("upsert only supports slices, not other pointer types");
-            }
-
-            if (pointer_info.child == u8) {
+            if (pointer_info.size == .slice and pointer_info.child == u8) {
                 try upsertBytes(DB, hash_kind, map, key, value);
             } else {
-                try upsertArray(DB, hash_kind, map, key, Field, value);
+                @compileError("unsupported upsert field type: " ++ @typeName(Field));
             }
         },
         .array => |array_info| {
             if (array_info.child == u8) {
                 try upsertBytes(DB, hash_kind, map, key, &value);
             } else {
-                try upsertArray(DB, hash_kind, map, key, Field, value);
+                @compileError("unsupported upsert field type: " ++ @typeName(Field));
             }
         },
         .int => |int_info| switch (int_info.signedness) {
@@ -174,62 +170,6 @@ fn upsertField(
             .signed => try upsertInt(DB, hash_kind, map, key, value),
         },
         else => @compileError("unsupported upsert field type: " ++ @typeName(Field)),
-    }
-}
-
-fn upsertArray(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    map: DB.HashMap(.read_write),
-    key: hash.HashInt(hash_kind),
-    comptime Value: type,
-    value: Value,
-) !void {
-    var existing_cursor_maybe = try map.getCursor(key);
-    if (existing_cursor_maybe) |*existing_cursor| {
-        if (try valueEqual(DB, hash_kind, Value, value, existing_cursor)) {
-            return;
-        }
-    }
-
-    var value_cursor = try map.putCursor(key);
-    try value_cursor.write(.{ .slot = null });
-    try upsertValue(DB, hash_kind, Value, value, &value_cursor);
-}
-
-fn upsertValue(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    comptime Value: type,
-    value: Value,
-    cursor: *DB.Cursor(.read_write),
-) !void {
-    switch (@typeInfo(Value)) {
-        .pointer => |pointer_info| {
-            if (pointer_info.size == .slice and pointer_info.child == u8) {
-                try cursor.write(.{ .bytes = value });
-            } else if (pointer_info.size == .slice) {
-                const list = try DB.ArrayList(.read_write).init(cursor.*);
-                for (value) |item| {
-                    var item_cursor = try list.appendCursor();
-                    try upsertValue(DB, hash_kind, pointer_info.child, item, &item_cursor);
-                }
-            } else {
-                @compileError("unsupported upsert value type: " ++ @typeName(Value));
-            }
-        },
-        .array => |array_info| {
-            const list = try DB.ArrayList(.read_write).init(cursor.*);
-            for (value) |item| {
-                var item_cursor = try list.appendCursor();
-                try upsertValue(DB, hash_kind, array_info.child, item, &item_cursor);
-            }
-        },
-        .int => |int_info| switch (int_info.signedness) {
-            .unsigned => try cursor.write(.{ .uint = value }),
-            .signed => try cursor.write(.{ .int = value }),
-        },
-        else => @compileError("unsupported upsert value type: " ++ @typeName(Value)),
     }
 }
 
@@ -284,54 +224,6 @@ fn upsertInt(
     }
 
     try map.put(key, .{ .int = value });
-}
-
-fn valueEqual(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    comptime Value: type,
-    value: Value,
-    cursor: *DB.Cursor(.read_only),
-) !bool {
-    switch (@typeInfo(Value)) {
-        .pointer => |pointer_info| {
-            if (pointer_info.size == .slice and pointer_info.child == u8) {
-                return try bytesEqual(DB, cursor, value);
-            } else if (pointer_info.size == .slice) {
-                return try arrayEqual(DB, hash_kind, pointer_info.child, value, cursor);
-            } else {
-                @compileError("unsupported upsert value type: " ++ @typeName(Value));
-            }
-        },
-        .array => |array_info| return try arrayEqual(DB, hash_kind, array_info.child, value[0..], cursor),
-        .int => |int_info| switch (int_info.signedness) {
-            .unsigned => return (try cursor.readUint()) == value,
-            .signed => return (try cursor.readInt()) == value,
-        },
-        else => @compileError("unsupported upsert value type: " ++ @typeName(Value)),
-    }
-}
-
-fn arrayEqual(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    comptime Item: type,
-    values: []const Item,
-    cursor: *DB.Cursor(.read_only),
-) !bool {
-    const list = try DB.ArrayList(.read_only).init(cursor.*);
-    if (try list.count() != values.len) {
-        return false;
-    }
-
-    for (values, 0..) |value, i| {
-        var item_cursor = try list.getCursor(@intCast(i)) orelse return false;
-        if (!try valueEqual(DB, hash_kind, Item, value, &item_cursor)) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 fn bytesEqual(

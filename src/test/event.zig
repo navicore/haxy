@@ -47,7 +47,7 @@ test "simple" {
                 .issue = .{
                     .title = "Login form clears password on validation error",
                     .description = "Submitting an invalid email address resets the password field. Preserve the field value and show an inline validation message.",
-                    .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+                    .tags = "bug\x00priority-high\x00ui",
                 },
             },
         },
@@ -58,7 +58,7 @@ test "simple" {
                 .issue = .{
                     .title = "Login form clears password on validation error",
                     .description = "Submitting an invalid email address resets the password field and removes typed input. Preserve the field value and show an inline validation message.",
-                    .tags = &[_][]const u8{ "bug", "priority-low", "ui" },
+                    .tags = "bug\x00priority-low\x00ui",
                 },
             },
         },
@@ -68,7 +68,7 @@ test "simple" {
                 .issue = .{
                     .title = "Search results ignore archived project filter",
                     .description = "Filtering search results to active projects still returns issues from archived projects. Apply the archived flag before ranking results.",
-                    .tags = &[_][]const u8{ "bug", "search", "backend" },
+                    .tags = "bug\x00search\x00backend",
                 },
             },
         },
@@ -78,7 +78,7 @@ test "simple" {
                 .issue = .{
                     .title = "Issue list does not persist selected sort order",
                     .description = "Changing the issue list sort order is lost after refresh. Store the selected sort field and direction with the user's view preferences.",
-                    .tags = &[_][]const u8{ "enhancement", "frontend", "preferences" },
+                    .tags = "enhancement\x00frontend\x00preferences",
                 },
             },
         },
@@ -194,14 +194,8 @@ test "simple" {
 
         // make sure the issue's tags were correctly edited
         const tags_cursor = try first_issue.getCursor(hash.hashInt(repo_opts.hash, "tags")) orelse return error.NotFound;
-        const tags = try Repo.DB.ArrayList(.read_only).init(tags_cursor);
-        try std.testing.expectEqual(events_to_consume[1].data.issue.tags.len, try tags.count());
-
-        for (events_to_consume[1].data.issue.tags, 0..) |expected_tag, i| {
-            const tag_cursor = try tags.getCursor(@intCast(i)) orelse return error.NotFound;
-            const tag_value = try tag_cursor.readBytesAlloc(allocator, null);
-            defer allocator.free(tag_value);
-            try std.testing.expectEqualStrings(expected_tag, tag_value);
-        }
+        const tags_value = try tags_cursor.readBytesAlloc(allocator, null);
+        defer allocator.free(tags_value);
+        try std.testing.expectEqualStrings(events_to_consume[1].data.issue.tags, tags_value);
     }
 }
