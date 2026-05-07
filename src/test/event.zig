@@ -58,7 +58,7 @@ test "simple" {
                 .issue = .{
                     .title = "Login form clears password on validation error",
                     .description = "Submitting an invalid email address resets the password field and removes typed input. Preserve the field value and show an inline validation message.",
-                    .tags = &[_][]const u8{ "bug", "priority-high", "ui" },
+                    .tags = &[_][]const u8{ "bug", "priority-low", "ui" },
                 },
             },
         },
@@ -191,5 +191,17 @@ test "simple" {
         const first_issue_description_value = try first_issue_description_cursor.readBytesAlloc(allocator, null);
         defer allocator.free(first_issue_description_value);
         try std.testing.expectEqualStrings(events_to_consume[1].data.issue.description, first_issue_description_value);
+
+        // make sure the issue's tags were correctly edited
+        const tags_cursor = try first_issue.getCursor(hash.hashInt(repo_opts.hash, "tags")) orelse return error.NotFound;
+        const tags = try Repo.DB.ArrayList(.read_only).init(tags_cursor);
+        try std.testing.expectEqual(events_to_consume[1].data.issue.tags.len, try tags.count());
+
+        for (events_to_consume[1].data.issue.tags, 0..) |expected_tag, i| {
+            const tag_cursor = try tags.getCursor(@intCast(i)) orelse return error.NotFound;
+            const tag_value = try tag_cursor.readBytesAlloc(allocator, null);
+            defer allocator.free(tag_value);
+            try std.testing.expectEqualStrings(expected_tag, tag_value);
+        }
     }
 }
