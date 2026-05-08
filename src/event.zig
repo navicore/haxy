@@ -121,9 +121,8 @@ pub fn consume(
                     if (repo_event.parent_oid) |*parent_oid| {
                         if (!std.mem.eql(u8, last_object_id, parent_oid)) {
                             // the last-object-id does not match the current event's parent id.
-                            // this means that a rebase occurred. what we need to do is just
-                            // revert the two object-id maps to the state they were in when
-                            // parent-oid was consumed.
+                            // this means that a rebase occurred. we just need to revert the
+                            // object-id maps to the state they were in when parent-oid was consumed.
 
                             const object_id_to_tx_id = try DB.HashMap(.read_only).init(object_id_to_tx_id_cursor.readOnly());
                             const tx_id_cursor = try object_id_to_tx_id.getCursor(hash.bytesToInt(hash_kind, parent_oid)) orelse return error.ObjectNotFound;
@@ -148,7 +147,8 @@ pub fn consume(
                         // the branch was rebased all the way to the very beginning.
                         // we have a repo event with no parent, which means it is now
                         // the very first event. all we need to do is set the
-                        // object-id->views map to be empty so we can rebuild it.
+                        // object-id maps to be empty.
+                        try object_id_to_tx_id_cursor.write(.{ .slot = null });
                         try object_id_to_views_cursor.write(.{ .slot = null });
                     }
                 } else {
