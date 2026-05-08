@@ -5,7 +5,11 @@ const hash = xit.hash;
 
 const event_id_size: usize = 32;
 
-pub const EventData = union(enum) {
+pub const EventKind = enum {
+    issue,
+};
+
+pub const EventData = union(EventKind) {
     issue: struct {
         title: []const u8,
         description: []const u8,
@@ -123,6 +127,35 @@ pub fn consume(
     try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .repo_events = repo_events });
 }
 
+pub fn read(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    allocator: std.mem.Allocator,
+    map: DB.HashMap(.read_only),
+    kind: EventKind,
+) !EventData {
+    return switch (kind) {
+        .issue => .{
+            .issue = .{
+                .title = try readBytes(DB, hash_kind, allocator, map, "title"),
+                .description = try readBytes(DB, hash_kind, allocator, map, "description"),
+                .tags = try readBytes(DB, hash_kind, allocator, map, "tags"),
+            },
+        },
+    };
+}
+
+fn readBytes(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    allocator: std.mem.Allocator,
+    map: DB.HashMap(.read_only),
+    field_name: []const u8,
+) ![]const u8 {
+    const cursor = try map.getCursor(hash.hashInt(hash_kind, field_name)) orelse return error.NotFound;
+    return try cursor.readBytesAlloc(allocator, null);
+}
+
 fn upsert(
     comptime DB: type,
     comptime hash_kind: hash.HashKind,
@@ -166,8 +199,24 @@ fn upsertField(
             }
         },
         .int => |int_info| switch (int_info.signedness) {
-            .unsigned => try upsertUint(DB, hash_kind, map, key, value),
-            .signed => try upsertInt(DB, hash_kind, map, key, value),
+            .unsigned => {
+                if (try map.getCursor(key)) |value_cursor| {
+                    if (try value_cursor.readUint() == value) {
+                        return;
+                    }
+                }
+
+                try map.put(key, .{ .uint = value });
+            },
+            .signed => {
+                if (try map.getCursor(key)) |value_cursor| {
+                    if (try value_cursor.readInt() == value) {
+                        return;
+                    }
+                }
+
+                try map.put(key, .{ .int = value });
+            },
         },
         else => @compileError("unsupported upsert field type: " ++ @typeName(Field)),
     }
@@ -192,38 +241,6 @@ fn upsertBytes(
     var writer = try value_cursor.writer(&write_buffer);
     try writer.interface.writeAll(value);
     try writer.finish();
-}
-
-fn upsertUint(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    map: DB.HashMap(.read_write),
-    key: hash.HashInt(hash_kind),
-    value: u64,
-) !void {
-    if (try map.getCursor(key)) |value_cursor| {
-        if (try value_cursor.readUint() == value) {
-            return;
-        }
-    }
-
-    try map.put(key, .{ .uint = value });
-}
-
-fn upsertInt(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    map: DB.HashMap(.read_write),
-    key: hash.HashInt(hash_kind),
-    value: i64,
-) !void {
-    if (try map.getCursor(key)) |value_cursor| {
-        if (try value_cursor.readInt() == value) {
-            return;
-        }
-    }
-
-    try map.put(key, .{ .int = value });
 }
 
 fn bytesEqual(

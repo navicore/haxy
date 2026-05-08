@@ -184,18 +184,13 @@ test "simple" {
 
         // get the issue out of the map that was edited
         const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_event_id)) orelse return error.NotFound;
-        const first_issue = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
+        const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
+        const first_issue = try evt.read(Repo.DB, repo_opts.hash, arena.allocator(), first_issue_map, .issue);
 
         // make sure the issue's description was correctly edited
-        const first_issue_description_cursor = try first_issue.getCursor(hash.hashInt(repo_opts.hash, "description")) orelse return error.NotFound;
-        const first_issue_description_value = try first_issue_description_cursor.readBytesAlloc(allocator, null);
-        defer allocator.free(first_issue_description_value);
-        try std.testing.expectEqualStrings(events_to_consume[1].data.issue.description, first_issue_description_value);
+        try std.testing.expectEqualStrings(events_to_consume[1].data.issue.description, first_issue.issue.description);
 
         // make sure the issue's tags were correctly edited
-        const tags_cursor = try first_issue.getCursor(hash.hashInt(repo_opts.hash, "tags")) orelse return error.NotFound;
-        const tags_value = try tags_cursor.readBytesAlloc(allocator, null);
-        defer allocator.free(tags_value);
-        try std.testing.expectEqualStrings(events_to_consume[1].data.issue.tags, tags_value);
+        try std.testing.expectEqualStrings(events_to_consume[1].data.issue.tags, first_issue.issue.tags);
     }
 }
