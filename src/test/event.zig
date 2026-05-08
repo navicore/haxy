@@ -109,66 +109,89 @@ test "simple" {
     // read and parse all of the events from the repo
     //
 
+    const Commit = struct {
+        parent_oid: ?[hash.byteLen(repo_opts.hash)]u8,
+        oid: [hash.byteLen(repo_opts.hash)]u8,
+        message: []const u8,
+
+        fn readCommitsFromRepo(inner_arena: *std.heap.ArenaAllocator, inner_repo: *Repo, branch_name: []const u8) ![]@This() {
+            const inner_allocator = inner_arena.allocator();
+
+            var commits: std.ArrayList(@This()) = .empty;
+
+            const ref = try inner_repo.readRef(io, .{ .kind = .head, .name = branch_name }) orelse return error.RefNotFound;
+            var commit_iter = try inner_repo.log(io, inner_allocator, &.{ref});
+
+            // read the message from each commit
+            while (try commit_iter.next()) |commit_object| {
+                try commit_object.object_reader.seekTo(commit_object.content.commit.message_position);
+                const message = try commit_object.object_reader.interface.allocRemaining(inner_allocator, .unlimited);
+
+                var commit: @This() = .{
+                    .parent_oid = undefined,
+                    .oid = undefined,
+                    .message = message,
+                };
+
+                _ = try std.fmt.hexToBytes(&commit.oid, &commit_object.oid);
+
+                if (commit_object.content.commit.metadata.parent_oids) |parent_oids| {
+                    if (parent_oids.len > 0) {
+                        _ = try std.fmt.hexToBytes(&(commit.parent_oid orelse unreachable), &parent_oids[0]);
+                    } else {
+                        commit.parent_oid = null;
+                    }
+                } else {
+                    commit.parent_oid = null;
+                }
+
+                try commits.append(inner_allocator, commit);
+            }
+
+            return commits.items;
+        }
+    };
+
     var events: std.ArrayList(evt.RepoEvent(repo_opts.hash)) = .empty;
     defer events.deinit(allocator);
 
     {
-        const Commit = struct {
-            oid: [hash.byteLen(repo_opts.hash)]u8,
-            message: []const u8,
-        };
-        var commits: std.ArrayList(Commit) = .empty;
-        defer commits.deinit(allocator);
-
-        const ref_haxy_meta = try repo.readRef(io, .{ .kind = .head, .name = "haxy/meta" }) orelse return error.RefNotFound;
-        var commit_iter = try repo.log(io, allocator, &.{ref_haxy_meta});
-        defer commit_iter.deinit();
-
-        // read the message from each commit
-        while (try commit_iter.next()) |commit_object| {
-            defer commit_object.deinit();
-
-            try commit_object.object_reader.seekTo(commit_object.content.commit.message_position);
-            const message = try commit_object.object_reader.interface.allocRemaining(arena.allocator(), .unlimited);
-
-            var commit: Commit = .{
-                .oid = undefined,
-                .message = message,
-            };
-            _ = try std.fmt.hexToBytes(&commit.oid, &commit_object.oid);
-
-            try commits.append(allocator, commit);
-        }
+        const commits = try Commit.readCommitsFromRepo(&arena, &repo, "haxy/meta");
 
         // parse commit messages as JSON into event values.
         // add events in reverse order so the earliest event is first.
-        for (0..commits.items.len) |i| {
-            const commit = commits.items[commits.items.len - i - 1];
+        for (0..commits.len) |i| {
+            const commit = commits[commits.len - i - 1];
             const event = try std.json.parseFromSliceLeaky(evt.Event, arena.allocator(), commit.message, .{});
-            try events.append(allocator, .{ .oid = commit.oid, .event = event });
+            try events.append(allocator, .{
+                .parent_oid = commit.parent_oid,
+                .oid = commit.oid,
+                .event = event,
+            });
         }
     }
+
+    const first_oid = events.items[0].oid;
 
     //
     // consume events into the database
     //
 
-    try evt.consume(Repo.DB, repo_opts.hash, io, &repo.core.db, repo.core.db_file, events.items);
-
-    const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-    // read the moment we just created
-    const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-    const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-    const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-    const haxy = try Repo.DB.HashMap(.read_only).init(haxy_cursor);
-
-    const object_id_to_views_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "object-id->views")) orelse return error.NotFound;
-    const object_id_to_views = try Repo.DB.HashMap(.read_only).init(object_id_to_views_cursor);
-
-    // make sure the issue from the first event was correctly edited
     {
+        try evt.consume(Repo.DB, repo_opts.hash, io, &repo.core.db, repo.core.db_file, events.items);
+
+        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
+
+        // read the moment we just created
+        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
+
+        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+        const haxy = try Repo.DB.HashMap(.read_only).init(haxy_cursor);
+
+        const object_id_to_views_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "object-id->views")) orelse return error.NotFound;
+        const object_id_to_views = try Repo.DB.HashMap(.read_only).init(object_id_to_views_cursor);
+
         // get the last object id
         const last_object_id_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "last-object-id")) orelse return error.NotFound;
         var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
@@ -187,10 +210,113 @@ test "simple" {
         const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
         const first_issue = try evt.EventData.read(Repo.DB, repo_opts.hash, arena.allocator(), first_issue_map, .issue);
 
-        // make sure the issue's description was correctly edited
+        // the description was correctly edited
         try std.testing.expectEqualStrings(events_to_consume[1].data.issue.description, first_issue.issue.description);
 
-        // make sure the issue's tags were correctly edited
+        // the tags were correctly edited
         try std.testing.expectEqualStrings(events_to_consume[1].data.issue.tags, first_issue.issue.tags);
+    }
+
+    //
+    // define new test events without the edit event
+    // and insert them into the repo
+    //
+
+    const rebased_events_to_consume = [_]evt.Event{
+        events_to_consume[2],
+        events_to_consume[3],
+    };
+
+    {
+        var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer json.deinit();
+
+        for (rebased_events_to_consume, 0..) |event, i| {
+            json.clearRetainingCapacity();
+
+            try std.json.Stringify.value(event, .{}, &json.writer);
+
+            // commit the event into a special branch
+            _ = try repo.commitAtRef(
+                io,
+                allocator,
+                .{
+                    .message = json.written(),
+                    // the first event should have the first oid as its parent,
+                    // because we want to keep the very first commit.
+                    // and the rest will have null which causes them
+                    // to have the previous commit as their parent
+                    .parent_oids = if (i == 0) &.{std.fmt.bytesToHex(first_oid, .lower)} else null,
+                },
+                null,
+                .{ .kind = .head, .name = "haxy/meta" },
+            );
+        }
+    }
+
+    //
+    // read and parse all of the events from the repo
+    //
+
+    events.clearRetainingCapacity();
+
+    {
+        const commits = try Commit.readCommitsFromRepo(&arena, &repo, "haxy/meta");
+
+        // parse commit messages as JSON into event values.
+        // add events in reverse order so the earliest event is first.
+        for (0..commits.len) |i| {
+            const commit = commits[commits.len - i - 1];
+            const event = try std.json.parseFromSliceLeaky(evt.Event, arena.allocator(), commit.message, .{});
+            try events.append(allocator, .{
+                .parent_oid = commit.parent_oid,
+                .oid = commit.oid,
+                .event = event,
+            });
+        }
+    }
+
+    //
+    // consume events into the database
+    //
+
+    {
+        try evt.consume(Repo.DB, repo_opts.hash, io, &repo.core.db, repo.core.db_file, events.items);
+
+        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
+
+        // read the moment we just created
+        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
+
+        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+        const haxy = try Repo.DB.HashMap(.read_only).init(haxy_cursor);
+
+        const object_id_to_views_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "object-id->views")) orelse return error.NotFound;
+        const object_id_to_views = try Repo.DB.HashMap(.read_only).init(object_id_to_views_cursor);
+
+        // get the last object id
+        const last_object_id_cursor = try haxy.getCursor(hash.hashInt(repo_opts.hash, "last-object-id")) orelse return error.NotFound;
+        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+        _ = try last_object_id_cursor.readBytes(&last_object_id);
+
+        // get the latest views (the views generated by the last object id)
+        const views_cursor = try object_id_to_views.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
+        const views = try Repo.DB.HashMap(.read_only).init(views_cursor);
+
+        // get the map of issues
+        const event_id_to_issue_cursor = try views.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
+        const event_id_to_issue = try Repo.DB.HashMap(.read_only).init(event_id_to_issue_cursor);
+
+        // get the issue out of the map that was edited
+        const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_event_id)) orelse return error.NotFound;
+        const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
+        const first_issue = try evt.EventData.read(Repo.DB, repo_opts.hash, arena.allocator(), first_issue_map, .issue);
+
+        // the description is no longer edited
+        try std.testing.expectEqualStrings(events_to_consume[0].data.issue.description, first_issue.issue.description);
+
+        // the tags are no longer edited
+        try std.testing.expectEqualStrings(events_to_consume[0].data.issue.tags, first_issue.issue.tags);
     }
 }

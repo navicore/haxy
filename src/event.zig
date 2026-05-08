@@ -57,6 +57,7 @@ pub const Event = struct {
 /// is rebased and force-pushed.
 pub fn RepoEvent(comptime hash_kind: hash.HashKind) type {
     return struct {
+        parent_oid: ?[hash.byteLen(hash_kind)]u8,
         oid: [hash.byteLen(hash_kind)]u8,
         event: Event,
     };
@@ -78,6 +79,7 @@ pub fn consume(
 ) !void {
     const Ctx = struct {
         repo_events: []RepoEvent(hash_kind),
+        history_count: u64,
 
         pub fn run(ctx: @This(), cursor: *DB.Cursor(.read_write)) !void {
             const moment = try DB.HashMap(.read_write).init(cursor.*);
@@ -96,9 +98,74 @@ pub fn consume(
 
             // for each event we want to consume...
             for (ctx.repo_events) |repo_event| {
+                // map that associates this oid with the current transaction id.
+                // this will be important for reverting things when a rebase occurrs.
+                var object_id_to_tx_id_cursor = try haxy.putCursor(hash.hashInt(hash_kind, "object-id->tx-id"));
+
                 // map with the views as they appeared when each event was consumed.
                 // we can use this to see (and revert) the views to any previous state.
-                const object_id_to_views_cursor = try haxy.putCursor(hash.hashInt(hash_kind, "object-id->views"));
+                var object_id_to_views_cursor = try haxy.putCursor(hash.hashInt(hash_kind, "object-id->views"));
+
+                // if this object id has already been consumed, skip it
+                {
+                    const object_id_to_views = try DB.HashMap(.read_only).init(object_id_to_views_cursor.readOnly());
+                    if (null != try object_id_to_views.getCursor(hash.bytesToInt(hash_kind, &repo_event.oid))) {
+                        continue;
+                    }
+                }
+
+                // compare last-object-id to the event's parent. this is important
+                // in situations where the branch was rebased, because in that case
+                // the last-object-id may no longer be valid.
+                if (last_object_id_maybe) |*last_object_id| {
+                    if (repo_event.parent_oid) |*parent_oid| {
+                        if (!std.mem.eql(u8, last_object_id, parent_oid)) {
+                            // the last-object-id does not match the current event's parent id.
+                            // this means that a rebase occurred. what we need to do is just
+                            // revert the two object-id maps to the state they were in when
+                            // parent-oid was consumed.
+
+                            const object_id_to_tx_id = try DB.HashMap(.read_only).init(object_id_to_tx_id_cursor.readOnly());
+                            const tx_id_cursor = try object_id_to_tx_id.getCursor(hash.bytesToInt(hash_kind, parent_oid)) orelse return error.ObjectNotFound;
+                            const tx_id = try tx_id_cursor.readUint();
+                            const history = try DB.ArrayList(.read_only).init(cursor.db.rootCursor().readOnly());
+
+                            const old_moment_cursor = try history.getCursor(tx_id) orelse return error.TransactionNotFound;
+                            const old_moment = try DB.HashMap(.read_only).init(old_moment_cursor);
+
+                            const old_haxy_cursor = try old_moment.getCursor(hash.hashInt(hash_kind, "haxy")) orelse return error.CursorNotFound;
+                            const old_haxy = try DB.HashMap(.read_only).init(old_haxy_cursor);
+
+                            const old_object_id_to_tx_id_cursor = try old_haxy.getCursor(hash.hashInt(hash_kind, "object-id->tx-id")) orelse return error.CursorNotFound;
+                            const old_object_id_to_views_cursor = try old_haxy.getCursor(hash.hashInt(hash_kind, "object-id->views")) orelse return error.CursorNotFound;
+
+                            try object_id_to_tx_id_cursor.write(.{ .slot = old_object_id_to_tx_id_cursor.slot() });
+                            try object_id_to_views_cursor.write(.{ .slot = old_object_id_to_views_cursor.slot() });
+
+                            last_object_id_maybe = parent_oid.*;
+                        }
+                    } else {
+                        // the branch was rebased all the way to the very beginning.
+                        // we have a repo event with no parent, which means it is now
+                        // the very first event. all we need to do is set the
+                        // object-id->views map to be empty so we can rebuild it.
+                        try object_id_to_views_cursor.write(.{ .slot = null });
+                    }
+                } else {
+                    if (repo_event.parent_oid) |_| {
+                        // there is no last-object-id, but this event has a parent.
+                        // this is an invalid state. if the event has a parent, that
+                        // implies that an event has already been processed, but
+                        // if that's true then there would be a last-object-id.
+                        return error.UnexpectedParent;
+                    }
+                }
+
+                // associate this object id with this transaction id
+                const object_id_to_tx_id = try DB.HashMap(.read_write).init(object_id_to_tx_id_cursor);
+                try object_id_to_tx_id.put(hash.bytesToInt(hash_kind, &repo_event.oid), .{ .uint = ctx.history_count });
+
+                // init the object-id->views map
                 const object_id_to_views = try DB.HashMap(.read_write).init(object_id_to_views_cursor);
 
                 // create a new views map for the current event we are consuming
@@ -153,7 +220,10 @@ pub fn consume(
 
     // create a new transaction in the database that runs the above-defined Ctx function
     const history = try DB.ArrayList(.read_write).init(db.rootCursor());
-    try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .repo_events = repo_events });
+    try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{
+        .repo_events = repo_events,
+        .history_count = try history.count(),
+    });
 }
 
 fn upsert(
