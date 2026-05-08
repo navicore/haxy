@@ -185,7 +185,7 @@ test "simple" {
         // get the issue out of the map that was edited
         const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_event_id)) orelse return error.NotFound;
         const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
-        const first_issue = try evt.read(Repo.DB, repo_opts.hash, arena.allocator(), first_issue_map, .issue);
+        const first_issue = try evt.EventData.read(Repo.DB, repo_opts.hash, arena.allocator(), first_issue_map, .issue);
 
         // make sure the issue's description was correctly edited
         try std.testing.expectEqualStrings(events_to_consume[1].data.issue.description, first_issue.issue.description);

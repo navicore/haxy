@@ -15,6 +15,35 @@ pub const EventData = union(EventKind) {
         description: []const u8,
         tags: []const u8,
     },
+
+    pub fn read(
+        comptime DB: type,
+        comptime hash_kind: hash.HashKind,
+        allocator: std.mem.Allocator,
+        map: DB.HashMap(.read_only),
+        kind: EventKind,
+    ) !EventData {
+        return switch (kind) {
+            .issue => .{
+                .issue = .{
+                    .title = try readBytes(DB, hash_kind, allocator, map, "title"),
+                    .description = try readBytes(DB, hash_kind, allocator, map, "description"),
+                    .tags = try readBytes(DB, hash_kind, allocator, map, "tags"),
+                },
+            },
+        };
+    }
+
+    fn readBytes(
+        comptime DB: type,
+        comptime hash_kind: hash.HashKind,
+        allocator: std.mem.Allocator,
+        map: DB.HashMap(.read_only),
+        field_name: []const u8,
+    ) ![]const u8 {
+        const cursor = try map.getCursor(hash.hashInt(hash_kind, field_name)) orelse return error.NotFound;
+        return try cursor.readBytesAlloc(allocator, null);
+    }
 };
 
 pub const Event = struct {
@@ -125,35 +154,6 @@ pub fn consume(
     // create a new transaction in the database that runs the above-defined Ctx function
     const history = try DB.ArrayList(.read_write).init(db.rootCursor());
     try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .repo_events = repo_events });
-}
-
-pub fn read(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    allocator: std.mem.Allocator,
-    map: DB.HashMap(.read_only),
-    kind: EventKind,
-) !EventData {
-    return switch (kind) {
-        .issue => .{
-            .issue = .{
-                .title = try readBytes(DB, hash_kind, allocator, map, "title"),
-                .description = try readBytes(DB, hash_kind, allocator, map, "description"),
-                .tags = try readBytes(DB, hash_kind, allocator, map, "tags"),
-            },
-        },
-    };
-}
-
-fn readBytes(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    allocator: std.mem.Allocator,
-    map: DB.HashMap(.read_only),
-    field_name: []const u8,
-) ![]const u8 {
-    const cursor = try map.getCursor(hash.hashInt(hash_kind, field_name)) orelse return error.NotFound;
-    return try cursor.readBytesAlloc(allocator, null);
 }
 
 fn upsert(
