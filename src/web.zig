@@ -1031,6 +1031,8 @@ fn handleDelete(io: std.Io, request: *std.http.Server.Request, allocator: std.me
         else => if (route.userTab().view == .delete) .{ .user = user.event.name } else return respondDeleteNotFound(request),
     };
 
+    // copied before the body read, which invalidates the request's headers
+    const token = if (getCookieValue(request, cookie_name)) |value| try arena.allocator().dupe(u8, value) else null;
     const body = try readFormBody(request, allocator);
     defer allocator.free(body);
     const confirm = (try parseFormField(arena.allocator(), body, "confirm")) orelse "";
@@ -1049,7 +1051,7 @@ fn handleDelete(io: std.Io, request: *std.http.Server.Request, allocator: std.me
         },
         // log the deleted user out, as a logout does
         .user => {
-            if (getCookieValue(request, cookie_name)) |token| server.session_store.remove(token);
+            if (token) |value| server.session_store.remove(value);
             try request.respond("", .{
                 .status = .see_other,
                 .keep_alive = false,
