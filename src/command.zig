@@ -3,6 +3,7 @@ const srv = @import("./serve.zig");
 
 pub const CommandKind = enum {
     serve,
+    delete_user,
 };
 
 const Help = struct {
@@ -23,6 +24,16 @@ fn commandHelp(command_kind: CommandKind) Help {
             \\use "none" for --ssh-listen to disable ssh. git clones over HTTP share the web UI's listener.
             \\--web-url and --ssh-url set the public urls shown to users, like https://example.com and ssh://example.com.
             \\--max-repo-size caps each repo's on-disk size, like 1G, rejecting pushes past it. no limit by default.
+            ,
+        },
+        .delete_user => .{
+            .name = "delete-user",
+            .descrip =
+            \\delete a user and everything they own, without their password.
+            ,
+            .example =
+            \\haxy delete-user alice --data-dir /srv/git
+            \\safe to run while the server is up.
             ,
         },
     };
@@ -182,12 +193,19 @@ pub const CommandArgs = struct {
 /// if any additional allocation needs to be done, the arena inside the cmd args will be used.
 pub const Command = union(CommandKind) {
     serve: srv.Options,
+    delete_user: srv.DeleteUserOptions,
 
     pub fn initMaybe(cmd_args: *CommandArgs) !?Command {
         const command_kind = cmd_args.command_kind orelse return null;
         switch (command_kind) {
             .serve => {
                 return .{ .serve = try serveOptions(cmd_args) orelse return null };
+            },
+            .delete_user => {
+                if (cmd_args.positional_args.len != 1) return null;
+                var options: srv.DeleteUserOptions = .{ .name = cmd_args.positional_args[0] };
+                if (cmd_args.get("--data-dir")) |value_maybe| options.data_dir = value_maybe orelse return error.DataDirNeedsValue;
+                return .{ .delete_user = options };
             },
         }
     }

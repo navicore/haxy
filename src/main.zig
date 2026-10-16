@@ -157,6 +157,7 @@ pub fn run(
         },
         .cli => |cli_cmd| switch (cli_cmd) {
             .serve => |options| try srv.run(repo_kind, any_repo_opts, io, allocator, cwd_path, options, run_opts.err, {}),
+            .delete_user => |options| try srv.deleteUser(io, allocator, cwd_path, options, run_opts.out, run_opts.err),
         },
     }
 }

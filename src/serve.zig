@@ -22,6 +22,51 @@ pub const Options = struct {
     fallback_on_address_in_use: bool = false,
 };
 
+pub const DeleteUserOptions = struct {
+    name: []const u8,
+    data_dir: []const u8 = ".",
+};
+
+// delete the named user as their own delete tab does, minus the password check
+pub fn deleteUser(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    options: DeleteUserOptions,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+) !void {
+    const data_dir_path = try std.Io.Dir.path.resolveAlloc(allocator, &.{ cwd_path, options.data_dir });
+    defer allocator.free(data_dir_path);
+    const users_dir = try std.Io.Dir.path.resolveAlloc(allocator, &.{ data_dir_path, "users" });
+    defer allocator.free(users_dir);
+    const admin_repo_path = try std.Io.Dir.path.resolveAlloc(allocator, &.{ data_dir_path, "admin" });
+    defer allocator.free(admin_repo_path);
+
+    var admin_repo = rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path }) catch |open_err| switch (open_err) {
+        error.RepoNotFound, error.FileNotFound => {
+            try err.print("no haxy data in {s}\n", .{data_dir_path});
+            return error.HandledError;
+        },
+        else => |e| return e,
+    };
+    defer admin_repo.deinit(io, allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const moment = try evt.currentMoment(evt.admin_repo_opts, &admin_repo);
+    const user_id, const user = blk: {
+        if (try evt.User.readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, moment, options.name)) |id| {
+            if (try ui.activeUser(moment, &arena, id)) |found| break :blk .{ id, found };
+        }
+        try err.print("no user named {s}\n", .{options.name});
+        return error.HandledError;
+    };
+
+    try evt.deleteUser(io, allocator, users_dir, &admin_repo, &user_id, .{ .name = user.event.name, .email = user.event.email });
+    try out.print("deleted user {s}\n", .{user.event.name});
+}
+
 const ListenAddress = struct {
     host: []const u8,
     port: u16,
